@@ -36,6 +36,10 @@ services:
       DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@litellm-db:5432/litellm
       STORE_MODEL_IN_DB: "False"     # models come from config.yaml (version-controlled)
       LITELLM_DONT_SHOW_FEEDBACK_BOX: "true"
+      # No usage telemetry. The host firewall (firewall/) blocks it anyway; this just
+      # stops the failed attempts. (`LITELLM_TELEMETRY_*` is read by current images;
+      # an older image ignores it harmlessly.)
+      LITELLM_TELEMETRY_DISABLED: "true"
       # models/qwen38: the engine's own key, if you set TENSORFOLD_API_KEY there.
       # Without one the engine ignores the value; it only has to be non-empty.
       QWEN38_API_KEY: ${QWEN38_API_KEY:-none}

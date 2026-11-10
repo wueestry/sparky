@@ -1,6 +1,6 @@
 # Host firewall — design
 
-**Status:** proposed, not implemented. The reference ruleset in the appendix was loaded and exercised in a throwaway network namespace (nft 1.1.6, 18 behavioural checks, all passing); nothing here has run on `spark-1822` yet. Section 10 lists what must be confirmed there first.
+**Status:** implemented (`firewall/`). The behaviour in this document is covered by `firewall/test-ruleset.sh` (74 checks in a throwaway namespace, mutation-checked); nothing has run on `spark-1822` yet, so section 10 (the spike) and a `MODE=audit` period come before enforcing. Deviations from the original design are listed under "Implementation notes" at the end.
 **Date:** 2026-11-10.
 **Services:** new `firewall/`; touches `tailscale/`, `litellm/`, `open-webui/`, `models/qwen38/`, top-level `README.md`, `CHANGELOG.md`.
 **Depends on:** the retirement of `vllm/`, `llama-cpp/` and Ollama (PR #8, merged), the Netdata removal (PR #9), and moving Tailscale to a host service. This spec assumes all three have landed.
@@ -420,3 +420,15 @@ nft delete element inet sparky_fw maint_dst '{ 0.0.0.0/0 }'
 ```
 
 Facts this design rests on, from Tailscale's source (`net/netns`, `tsconst`, `cmd/tailscale/cli`): non-loopback sockets created by `tailscaled` are marked `0x80000` under the mask `0xff0000` (falling back to binding the socket to a device if `SO_MARK` doesn't work); `--netfilter-mode` takes `on`, `nodivert` or `off`.
+
+## Implementation notes (where the build differs from the design above)
+
+- **Control script.** The logic lives in `firewall/sparky-firewall` (installed to `/usr/local/bin`), not in the Makefile, so the transient systemd timers (`sparky-fw-revert`, `sparky-fw-reenable`) don't depend on the repo checkout. The Makefile targets are thin `sudo` wrappers; the script also has `check`, `apply`, `confirm`, `revert`, `disable`, `enable`, `open`, `close`, `status`, `logs`, `audit-report`.
+- **`make install` loads and enables nothing.** `apply` installs and loads a validated ruleset; `confirm` enables the boot unit. The unit has `ConditionPathExists` on the ruleset, so an unconfirmed ruleset can't load at boot by accident.
+- **`tailscale set --netfilter-mode=off` happens in `apply`** (not `install`), and `revert` / `uninstall` set it back to `on`.
+- **`make check`** runs `nft -c`, warns about an active `ufw` and an enabled `nftables.service`, warns when no host Tailscale is found, and prints the default route. It does not print the Docker user's UID (nothing in the ruleset needs it: egress is default-deny for everyone but `tailscaled` and the NTP user).
+- **`MODE` default is `audit`** (`.env.example`); `apply` refuses `enforce` until `audit-report` has recorded a review (`FORCE=1` overrides).
+- **`apply` keeps the original previous ruleset** across repeated applies before a confirm, so `revert` always returns to the last *confirmed* state.
+- **`render.sh` normalises a host address to its network**: `LAN_CIDR=192.168.1.1/24` becomes `192.168.1.0/24` (with a note), and refuses IPv6, anything wider than a /8, and unsafe NTP-user values.
+- **Telemetry variables** (verified against upstream source, not guessed): LiteLLM `LITELLM_TELEMETRY_DISABLED=true` (current images; harmless on older ones), Open WebUI `ENABLE_VERSION_UPDATE_CHECK=false`. `OFFLINE_MODE=true` is documented but left off, because it also stops model downloads and would break RAG embeddings that are not cached yet.
+- **Spike items are unchanged and still open**, in particular: that rootless container egress reaches the host `OUTPUT` chain as the Docker user, what `tailscale0` traffic reaches `INPUT`, and what happens to a transfer that spans a re-enable.

@@ -11,6 +11,7 @@ Configuration for the [NVIDIA DGX Spark](https://amzn.to/47ZeWqZ) workstation `s
 - **Open WebUI** for the chat UI, over LiteLLM.
 - **Traefik** as the HTTPS reverse proxy in front of everything (docker-label-driven, mints its own internal CA).
 - **Tailscale** as a host service (kernel mode) for tailnet-only ingress (peer-to-peer over WireGuard; no public DNS, no public ports).
+- **Host firewall** (nftables, default-deny both ways): only the LAN (`192.168.1.0/24`) and Tailscale are reachable. The internet, container registries included, is closed unless you turn the firewall off on purpose.
 - **mDNS** helper publishing `<sub>.spark-1822.local` aliases on the LAN.
 
 ## Topology
@@ -32,6 +33,7 @@ TLS comes from two different roots: Traefik mints its own internal CA (clients i
 .
 ├── traefik/       # HTTPS reverse proxy (docker-label-driven)
 ├── tailscale/     # Tailscale host service — declarative Serve config + apply helper
+├── firewall/      # Host firewall (nftables): LAN + Tailscale only, internet closed by default
 ├── models/        # one subfolder per model recipe (qwen38/ …), served behind litellm
 ├── litellm/       # LiteLLM gateway (+ Postgres) in front of models/
 ├── open-webui/    # Open WebUI (chat UI over litellm)
@@ -52,6 +54,7 @@ Each stack has its own `README.md` — start there for deploy / configure / upgr
 |---|---|---|
 | [`traefik/`](traefik/) | HTTPS reverse proxy, docker-label-driven, mints its own internal CA | publishes `:80`/`:443` |
 | [`tailscale/`](tailscale/) | Tailscale as a host service (`tailscaled`, kernel mode) — tailnet-only ingress over WireGuard; Serve config fronts `traefik`, applied by a small helper | `https://spark-1822.<tailnet>.ts.net` |
+| [`firewall/`](firewall/) | Default-deny nftables firewall: in and out only to the LAN and Tailscale, no registry/hostname allow-list. `make disable` / `make enable` to reach the internet on purpose; audit mode, confirm-or-revert applies | host-level |
 | [`models/qwen38/`](models/qwen38/) | Qwen3.8 Flash Next on TensorFold (MiaAI-Lab recipe as an unpatched submodule, rootless-compatible, ~5 concurrent streams, 262k context). Reached only through LiteLLM | `127.0.0.1:8888` on the host; no router of its own |
 | [`litellm/`](litellm/) | LiteLLM OpenAI-compatible gateway + Postgres: one endpoint and key set for every model under `models/` | `https://litellm.spark-1822.local` |
 | [`open-webui/`](open-webui/) | Open WebUI chat UI, talking to LiteLLM (no GPU) | `https://open-webui.spark-1822.local` |
@@ -122,6 +125,18 @@ On a fresh host, in order:
 
    The node registers as `spark-1822.<tailnet>.ts.net` with a real publicly-trusted MagicDNS cert; Tailscale Serve wires `:80`/`:443` on the tailnet to Traefik. For per-backend tailnet URLs (`https://litellm.<tailnet>.ts.net`, `https://traefik.<tailnet>.ts.net`, …), create one [Tailscale VIP Service](https://tailscale.com/kb/1417/services) per backend in the admin console and list it in `tailscale/services.json` — see [`tailscale/README.md`](tailscale/README.md) for the full walk-through.
 
+6. **(Recommended) Lock the host down with the firewall** — after Tailscale (it depends on it) and from a LAN SSH session with a second one open:
+
+   ```bash
+   cd /opt/firewall
+   cp .env.example .env             # check LAN_CIDR
+   make check && make install && make apply   # MODE=audit first: logs, blocks nothing; reverts in 2 min…
+   make confirm                     # …unless you run this from a SECOND ssh session
+   make audit-report                # a few days later; then MODE=enforce, apply and confirm again
+   ```
+
+   From then on the internet is closed by default: pulling images, downloading models, `git pull` and OS updates need `make disable` … `make enable` (see below and [`firewall/README.md`](firewall/README.md)).
+
 ## Deploy workflow
 
 `/opt` on the host **is** a checkout of this repo — every stack lives in place at `/opt/<name>/`. Edit locally, commit, push; then pull on the host:
@@ -129,6 +144,15 @@ On a fresh host, in order:
 ```bash
 ssh spark-1822.local 'sudo git -C /opt pull --ff-only --recurse-submodules'
 ```
+
+With the firewall installed, the host can't reach GitHub until you turn the firewall off for the pull (it re-enables itself, and always on reboot):
+
+```bash
+ssh spark-1822.local 'make -C /opt/firewall disable MINUTES=10 \
+  && sudo git -C /opt pull --ff-only --recurse-submodules; make -C /opt/firewall enable'
+```
+
+Anything else that downloads (`docker compose pull`, `make prepare`, `apt upgrade`) follows the same pattern: `make -C /opt/firewall disable`, do it, `make -C /opt/firewall enable`.
 
 After the pull, apply the change in the relevant stack (each stack's README has details):
 

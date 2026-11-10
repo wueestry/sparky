@@ -1,0 +1,20 @@
+[Unit]
+Description=sparky host firewall (nftables)
+Documentation=https://github.com/wueestry/sparky/blob/main/docs/superpowers/specs/2026-11-10-host-firewall-design.md
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+After=local-fs.target
+# Only after `make confirm` has enabled it and a ruleset exists.
+ConditionPathExists=/etc/sparky-firewall/ruleset.nft
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# One atomic transaction: the table is replaced, never briefly absent.
+ExecStart=/usr/sbin/nft -f /etc/sparky-firewall/ruleset.nft
+ExecReload=/usr/sbin/nft -f /etc/sparky-firewall/ruleset.nft
+ExecStop=-/usr/sbin/nft delete table inet sparky_fw
+
+[Install]
+WantedBy=sysinit.target
