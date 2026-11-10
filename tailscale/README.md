@@ -71,38 +71,36 @@ tailnet client  ──(https on :443)──>  tailscale  ──(https+insecure)�
 
 ### Host-header routing — applied
 
-Each Traefik router uses a single `HostRegexp` matcher pinned to its per-service subdomain — `<svc>.{x:.+}` — which accepts the LAN form (`vllm.spark-1822.local`), the per-service tailnet form once you set up per-backend VIP services below (`vllm.<tailnet>.ts.net`), and any other `<svc>.<domain>` that gets pointed at Traefik.
+Each Traefik router uses a single `HostRegexp` matcher pinned to its per-service subdomain — `<svc>.{x:.+}` — which accepts the LAN form (`litellm.spark-1822.local`), the per-service tailnet form once you set up per-backend VIP services below (`vllm.<tailnet>.ts.net`), and any other `<svc>.<domain>` that gets pointed at Traefik.
 
 ```yaml
 # example, open-webui/docker-compose.yml
 - "traefik.http.routers.open-webui.rule=HostRegexp(`open-webui.{x:.+}`)"
 ```
 
-Five routers, one per service — `ollama`, `open-webui`, `vllm`, `llama` (label-based in each app's compose), plus `traefik` (file-based in `traefik/dynamic/services.yml`).
+Three routers, one per exposed service — `litellm` and `open-webui` (label-based in each app's compose), plus `traefik` (file-based in `traefik/dynamic/services.yml`). The model engines under `models/` have no router: they are reached only through `litellm`.
 
 ### Per-backend VIP Services
 
-A Tailscale [VIP Service](https://tailscale.com/kb/1417/services) is a separate tailnet entity from the node — it has its own MagicDNS name (e.g. `vllm.<tailnet>.ts.net`) and its own cert. One service per backend gives tailnet clients a per-service URL without running multiple Tailscale nodes (Tailscale doesn't support wildcard subdomains under a node's MagicDNS name, so this is the canonical multi-name pattern).
+A Tailscale [VIP Service](https://tailscale.com/kb/1417/services) is a separate tailnet entity from the node — it has its own MagicDNS name (e.g. `litellm.<tailnet>.ts.net`) and its own cert. One service per backend gives tailnet clients a per-service URL without running multiple Tailscale nodes (Tailscale doesn't support wildcard subdomains under a node's MagicDNS name, so this is the canonical multi-name pattern).
 
-Five services map to the five Traefik backends:
+Three services map to the three Traefik backends:
 
 | Service     | DNS                              | Lands on              |
 |-------------|----------------------------------|-----------------------|
 | `svc:traefik`     | `traefik.<tailnet>.ts.net`       | Traefik dashboard     |
-| `svc:vllm`        | `vllm.<tailnet>.ts.net`          | vLLM                  |
-| `svc:llama`       | `llama.<tailnet>.ts.net`         | llama.cpp             |
-| `svc:ollama`      | `ollama.<tailnet>.ts.net`        | Ollama                |
+| `svc:litellm`     | `litellm.<tailnet>.ts.net`       | LiteLLM gateway       |
 | `svc:open-webui`  | `open-webui.<tailnet>.ts.net`    | Open WebUI            |
 
-All five are declared in the `Services` block of [`serve.json`](serve.json), next to the node's own `:80`/`:443` config. They're indistinguishable on the wire — each proxies to the same `traefik` container, which routes by Host header:
+All three are declared in the `Services` block of [`serve.json`](serve.json), next to the node's own `:80`/`:443` config. They're indistinguishable on the wire — each proxies to the same `traefik` container, which routes by Host header:
 
 ```json
 "Services": {
-  "svc:vllm": {
+  "svc:litellm": {
     "TCP": { "80": { "HTTP": true }, "443": { "HTTPS": true } },
     "Web": {
-      "vllm.cuscus-macaroni.ts.net:80":  { "Handlers": { "/": { "Proxy": "http://traefik:80" } } },
-      "vllm.cuscus-macaroni.ts.net:443": { "Handlers": { "/": { "Proxy": "https+insecure://traefik:443" } } }
+      "litellm.cuscus-macaroni.ts.net:80":  { "Handlers": { "/": { "Proxy": "http://traefik:80" } } },
+      "litellm.cuscus-macaroni.ts.net:443": { "Handlers": { "/": { "Proxy": "https+insecure://traefik:443" } } }
     }
   },
   ...
@@ -118,7 +116,7 @@ cd /opt/tailscale
 make status     # live serve config + AdvertiseServices from the daemon's prefs
 ```
 
-Once all five advertise, Traefik routing accepts both `<svc>.spark-1822.local` (LAN) and `<svc>.<tailnet>.ts.net` (tailnet) on every router — the rules were relaxed from `<svc>.spark{x:.+}` to `<svc>.{x:.+}` to match either form.
+Once all three advertise, Traefik routing accepts both `<svc>.spark-1822.local` (LAN) and `<svc>.<tailnet>.ts.net` (tailnet) on every router — the rules were relaxed from `<svc>.spark{x:.+}` to `<svc>.{x:.+}` to match either form.
 
 ### Troubleshooting: admin console shows "needs configuration"
 
@@ -129,6 +127,10 @@ Historically this happened after every container recreate: services were pushed 
 ### Legacy `svc:spark`
 
 The first VIP service set up here was `svc:spark` — one service proxying everything to Traefik. The per-backend setup above supersedes it, and it is no longer declared in `serve.json`, so this node doesn't advertise it. Delete it in the admin console; hit `traefik.<tailnet>.ts.net` for the dashboard instead.
+
+### Retired services: `svc:vllm`, `svc:llama`, `svc:ollama`
+
+The vLLM, llama.cpp and Ollama stacks were retired in favour of `models/` behind LiteLLM, so these three are no longer declared in `serve.json` or advertised. Create `svc:litellm` in the admin console (ports `tcp/80` + `tcp/443`) **before** deploying this change, then delete the three old services there. Until `svc:litellm` exists the node will advertise a service the tailnet does not know about.
 
 ## Logs
 

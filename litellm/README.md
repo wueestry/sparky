@@ -46,4 +46,4 @@ If a backend is down, LiteLLM returns an error for that model; it does not start
 
 ## Open WebUI
 
-Not wired yet: Open WebUI still talks to Ollama. Pointing it at LiteLLM (`OPENAI_API_BASE_URL=http://litellm:4000/v1` plus a virtual key) is part of retiring Ollama and the old engines.
+[`open-webui/`](../open-webui/) is the chat UI over this gateway (`OPENAI_API_BASE_URL=http://litellm:4000/v1` plus its own virtual key; see its README for creating the key). Bring this stack up first.
