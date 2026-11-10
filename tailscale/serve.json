@@ -54,7 +54,7 @@
         }
       }
     },
-    "svc:vllm": {
+    "svc:litellm": {
       "TCP": {
         "80": {
           "HTTP": true
@@ -64,66 +64,14 @@
         }
       },
       "Web": {
-        "vllm.cuscus-macaroni.ts.net:80": {
+        "litellm.cuscus-macaroni.ts.net:80": {
           "Handlers": {
             "/": {
               "Proxy": "http://traefik:80"
             }
           }
         },
-        "vllm.cuscus-macaroni.ts.net:443": {
-          "Handlers": {
-            "/": {
-              "Proxy": "https+insecure://traefik:443"
-            }
-          }
-        }
-      }
-    },
-    "svc:llama": {
-      "TCP": {
-        "80": {
-          "HTTP": true
-        },
-        "443": {
-          "HTTPS": true
-        }
-      },
-      "Web": {
-        "llama.cuscus-macaroni.ts.net:80": {
-          "Handlers": {
-            "/": {
-              "Proxy": "http://traefik:80"
-            }
-          }
-        },
-        "llama.cuscus-macaroni.ts.net:443": {
-          "Handlers": {
-            "/": {
-              "Proxy": "https+insecure://traefik:443"
-            }
-          }
-        }
-      }
-    },
-    "svc:ollama": {
-      "TCP": {
-        "80": {
-          "HTTP": true
-        },
-        "443": {
-          "HTTPS": true
-        }
-      },
-      "Web": {
-        "ollama.cuscus-macaroni.ts.net:80": {
-          "Handlers": {
-            "/": {
-              "Proxy": "http://traefik:80"
-            }
-          }
-        },
-        "ollama.cuscus-macaroni.ts.net:443": {
+        "litellm.cuscus-macaroni.ts.net:443": {
           "Handlers": {
             "/": {
               "Proxy": "https+insecure://traefik:443"

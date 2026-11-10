@@ -76,9 +76,7 @@ All hosts use the wildcard cert:
 
 | Host | Upstream |
 |---|---|
-| `https://llama.spark-1822.local` | `llama-cpp:8080` |
-| `https://vllm.spark-1822.local` | `vllm:8000` |
-| `https://ollama.spark-1822.local` | `ollama:11434` |
+| `https://litellm.spark-1822.local` | `litellm:4000` |
 | `https://open-webui.spark-1822.local` | `open-webui:8080` |
 | `https://netdata.spark-1822.local` | `host.docker.internal:19999` |
 | `https://traefik.spark-1822.local` | Traefik's own dashboard + API |
@@ -87,7 +85,7 @@ Plain HTTP requests on `:80` are 308-redirected to HTTPS.
 
 ### Long-lived streaming responses
 
-Traefik's stock timeout defaults are tuned for ordinary request/response traffic, not LLM token streaming: `entryPoints.websecure.transport.respondingTimeouts.idleTimeout` defaults to 180s, and `serversTransport.forwardingTimeouts.idleConnTimeout` defaults to 90s. Either one can cut a response mid-stream if generation goes quiet between chunks for longer than that — the backend (`ollama`/`llama-cpp`/`vllm`) is still working, but the client sees the connection die. Both are set to `0` (no timeout) in `traefik.yml`, globally, since every service behind this entrypoint is internal/trusted rather than public-facing. Don't "clean these back up" to defaults — they're the fix for a real, reproduced cutoff, not leftover config.
+Traefik's stock timeout defaults are tuned for ordinary request/response traffic, not LLM token streaming: `entryPoints.websecure.transport.respondingTimeouts.idleTimeout` defaults to 180s, and `serversTransport.forwardingTimeouts.idleConnTimeout` defaults to 90s. Either one can cut a response mid-stream if generation goes quiet between chunks for longer than that — the backend (an engine under `models/`, via `litellm`) is still working, but the client sees the connection die. Both are set to `0` (no timeout) in `traefik.yml`, globally, since every service behind this entrypoint is internal/trusted rather than public-facing. Don't "clean these back up" to defaults — they're the fix for a real, reproduced cutoff, not leftover config.
 
 ## Add an app
 
