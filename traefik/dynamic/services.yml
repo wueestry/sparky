@@ -1,17 +1,10 @@
-# Routes that can't be expressed as labels on a docker-compose service.
+# Routes that can't be expressed as labels on a docker-compose service (today:
+# Traefik's own dashboard).
 # Everything else is discovered from container labels by the docker
 # provider (see services' compose files for `traefik.http.*` labels).
 
 http:
   routers:
-    # netdata runs in network_mode: host — no container endpoint for the
-    # docker provider to attach to. Route to host.docker.internal:19999.
-    netdata:
-      rule: "HostRegexp(`netdata.{x:.+}`)"
-      entryPoints: [websecure]
-      service: netdata
-      tls: {}
-
     # Traefik's own dashboard + API, fronted by the proxy itself.
     # The second matcher (`spark{x:.+}` — anything starting with `spark`)
     # catches the bare tailnet Host header forwarded by the legacy `svc:spark`
@@ -24,10 +17,3 @@ http:
       entryPoints: [websecure]
       service: api@internal
       tls: {}
-
-  services:
-    netdata:
-      loadBalancer:
-        servers:
-          - url: "http://host.docker.internal:19999"
-        passHostHeader: true

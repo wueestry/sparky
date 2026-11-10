@@ -4,7 +4,7 @@ HTTPS reverse proxy — front-facing entry point on this host. Publishes `:80` /
 
 ## How routing works
 
-Each app's `docker-compose.yml` carries `traefik.*` labels (router `rule`, `entryPoints`, `tls`, `loadbalancer.server.port`). Traefik's **docker provider** discovers them via the docker socket and wires up routers + services automatically — no central config file to edit when you add a new app. Anything that can't be label-driven (host-network containers like `netdata`; Traefik's own dashboard) lives in `dynamic/services.yml` and the **file provider** picks it up.
+Each app's `docker-compose.yml` carries `traefik.*` labels (router `rule`, `entryPoints`, `tls`, `loadbalancer.server.port`). Traefik's **docker provider** discovers them via the docker socket and wires up routers + services automatically — no central config file to edit when you add a new app. Anything that can't be label-driven (Traefik's own dashboard) lives in `dynamic/services.yml` and the **file provider** picks it up.
 
 ## Files
 
@@ -13,7 +13,7 @@ traefik/
 ├── docker-compose.yml         # traefik service, defines + owns the shared `traefik` network, mounts docker.sock:ro
 ├── traefik.yml                # static config — docker + file providers, entrypoints, api, log
 ├── dynamic/                   # file provider — hot-reloaded on edit
-│   ├── services.yml           # routes for things the docker provider can't reach (netdata, dashboard)
+│   ├── services.yml           # routes for things the docker provider can't reach (the dashboard)
 │   └── tls.yml                # references the wildcard cert from certs/
 ├── wildcard.cnf               # OpenSSL config for `make wildcard-cert`
 ├── Makefile                   # `make ca-cert` (one-time) + `make wildcard-cert` (renew)
@@ -78,7 +78,6 @@ All hosts use the wildcard cert:
 |---|---|
 | `https://litellm.spark-1822.local` | `litellm:4000` |
 | `https://open-webui.spark-1822.local` | `open-webui:8080` |
-| `https://netdata.spark-1822.local` | `host.docker.internal:19999` |
 | `https://traefik.spark-1822.local` | Traefik's own dashboard + API |
 
 Plain HTTP requests on `:80` are 308-redirected to HTTPS.

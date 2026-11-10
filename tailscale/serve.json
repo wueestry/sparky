@@ -105,32 +105,6 @@
           }
         }
       }
-    },
-    "svc:netdata": {
-      "TCP": {
-        "80": {
-          "HTTP": true
-        },
-        "443": {
-          "HTTPS": true
-        }
-      },
-      "Web": {
-        "netdata.cuscus-macaroni.ts.net:80": {
-          "Handlers": {
-            "/": {
-              "Proxy": "http://traefik:80"
-            }
-          }
-        },
-        "netdata.cuscus-macaroni.ts.net:443": {
-          "Handlers": {
-            "/": {
-              "Proxy": "https+insecure://traefik:443"
-            }
-          }
-        }
-      }
     }
   }
 }

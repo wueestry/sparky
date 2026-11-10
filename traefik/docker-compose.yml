@@ -5,8 +5,6 @@ services:
     image: traefik:${TRAEFIK_TAG:?TRAEFIK_TAG must be set in .env}
     container_name: traefik
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
       - traefik
     ports:

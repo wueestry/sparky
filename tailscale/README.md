@@ -59,7 +59,7 @@ tailnet client  ──(https on :443)──>  tailscale  ──(https+insecure)�
                                                                        │
                                                                        │ Host header routing
                                                                        ▼
-                                                                   backend (litellm / open-webui / netdata / ...)
+                                                                   backend (litellm / open-webui / ...)
 ```
 
 - The Tailscale daemon runs in userspace mode (no `/dev/net/tun`, no privileged caps) and registers as one node on your tailnet using `TS_AUTHKEY`.
@@ -78,22 +78,21 @@ Each Traefik router uses a single `HostRegexp` matcher pinned to its per-service
 - "traefik.http.routers.open-webui.rule=HostRegexp(`open-webui.{x:.+}`)"
 ```
 
-Four routers, one per exposed service — `litellm` and `open-webui` (label-based in each app's compose), plus `netdata` and `traefik` (file-based in `traefik/dynamic/services.yml`). The model engines under `models/` have no router: they are reached only through `litellm`.
+Three routers, one per exposed service — `litellm` and `open-webui` (label-based in each app's compose), plus `traefik` (file-based in `traefik/dynamic/services.yml`). The model engines under `models/` have no router: they are reached only through `litellm`.
 
 ### Per-backend VIP Services
 
 A Tailscale [VIP Service](https://tailscale.com/kb/1417/services) is a separate tailnet entity from the node — it has its own MagicDNS name (e.g. `litellm.<tailnet>.ts.net`) and its own cert. One service per backend gives tailnet clients a per-service URL without running multiple Tailscale nodes (Tailscale doesn't support wildcard subdomains under a node's MagicDNS name, so this is the canonical multi-name pattern).
 
-Four services map to the four Traefik backends:
+Three services map to the three Traefik backends:
 
 | Service     | DNS                              | Lands on              |
 |-------------|----------------------------------|-----------------------|
 | `svc:traefik`     | `traefik.<tailnet>.ts.net`       | Traefik dashboard     |
 | `svc:litellm`     | `litellm.<tailnet>.ts.net`       | LiteLLM gateway       |
 | `svc:open-webui`  | `open-webui.<tailnet>.ts.net`    | Open WebUI            |
-| `svc:netdata`     | `netdata.<tailnet>.ts.net`       | Netdata               |
 
-All four are declared in the `Services` block of [`serve.json`](serve.json), next to the node's own `:80`/`:443` config. They're indistinguishable on the wire — each proxies to the same `traefik` container, which routes by Host header:
+All three are declared in the `Services` block of [`serve.json`](serve.json), next to the node's own `:80`/`:443` config. They're indistinguishable on the wire — each proxies to the same `traefik` container, which routes by Host header:
 
 ```json
 "Services": {
@@ -117,7 +116,7 @@ cd /opt/tailscale
 make status     # live serve config + AdvertiseServices from the daemon's prefs
 ```
 
-Once all four advertise, Traefik routing accepts both `<svc>.spark-1822.local` (LAN) and `<svc>.<tailnet>.ts.net` (tailnet) on every router — the rules were relaxed from `<svc>.spark{x:.+}` to `<svc>.{x:.+}` to match either form.
+Once all three advertise, Traefik routing accepts both `<svc>.spark-1822.local` (LAN) and `<svc>.<tailnet>.ts.net` (tailnet) on every router — the rules were relaxed from `<svc>.spark{x:.+}` to `<svc>.{x:.+}` to match either form.
 
 ### Troubleshooting: admin console shows "needs configuration"
 
