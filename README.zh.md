@@ -11,7 +11,6 @@
 - **vLLM** 与 **llama.cpp** 负责推理（分别对应 HF safetensors 与 GGUF 格式，均在 GB10 上启用 GPU 加速）。
 - **Open WebUI + Ollama** 提供聊天界面。
 - **Traefik** 作为所有服务前置的 HTTPS 反向代理（由 docker 标签驱动，自签发内部 CA）。
-- **Cloudflare Tunnel** 提供仅出站的公网入口（主机不开放任何入站端口）。
 - **Tailscale** sidecar 提供仅限 tailnet 的入口（基于 WireGuard 的点对点连接；无公共 DNS、无公开端口）。
 - **Netdata** 提供实时可观测性。
 - **mDNS** 辅助服务在局域网内发布 `<sub>.spark-1822.local` 别名。
@@ -19,24 +18,22 @@
 
 ## 拓扑结构
 
-三条流量入口路径通向同一批后端：
+两条流量入口路径通向同一批后端：
 
 ```
 局域网客户端  ──(mDNS *.spark-1822.local)──>  traefik :80/:443  ──>  后端
-公网客户端    ──(DNS, Cloudflare 边缘节点)──>  cloudflared ──>  traefik :80  ──>  后端
 tailnet 客户端 ──(MagicDNS, WireGuard)──>  tailscale :443  ──>  traefik :80  ──>  后端
 ```
 
-后端服务（`vllm`、`llama-cpp`、`open-webui`、`ollama`）都位于同一个共享 Docker 网络 `traefik` 中 —— 该网络由 `traefik/` 这个 stack 定义，其余所有服务以 `external: true` 的方式加入。当前使用的代理以及两个隧道/sidecar 连接器都接入同一个网络，并直接通过容器名称互相访问。`netdata` 是例外：它以 `network_mode: host` 运行（用于获取主机级别的 PID/proc 遥测数据），因此在 `traefik` 网络中没有端点 —— Traefik 通过 `traefik/dynamic/services.yml` 中指向 `host.docker.internal:19999` 的静态路由访问它，而不是通过容器名 DNS。
+后端服务（`vllm`、`llama-cpp`、`open-webui`、`ollama`）都位于同一个共享 Docker 网络 `traefik` 中 —— 该网络由 `traefik/` 这个 stack 定义，其余所有服务以 `external: true` 的方式加入。当前使用的代理以及 Tailscale sidecar 都接入同一个网络，并直接通过容器名称互相访问。`netdata` 是例外：它以 `network_mode: host` 运行（用于获取主机级别的 PID/proc 遥测数据），因此在 `traefik` 网络中没有端点 —— Traefik 通过 `traefik/dynamic/services.yml` 中指向 `host.docker.internal:19999` 的静态路由访问它，而不是通过容器名 DNS。
 
-TLS 证书来自三个不同的根：Traefik 自签发内部 CA（客户端只需安装一次 `traefik-root.crt`）；Cloudflare 在其边缘节点为隧道主机名提供公共信任证书；Tailscale 为 tailnet 主机名自动签发公共信任的 MagicDNS 证书。
+TLS 证书来自两个不同的根：Traefik 自签发内部 CA（客户端只需安装一次 `traefik-root.crt`）；Tailscale 为 tailnet 主机名自动签发公共信任的 MagicDNS 证书。
 
 ## 目录结构
 
 ```
 .
 ├── traefik/       # HTTPS 反向代理（由 docker 标签驱动）
-├── cloudflare/    # Cloudflare Tunnel 连接器 —— 公网入口
 ├── tailscale/     # Tailscale sidecar —— tailnet 入口
 ├── vllm/          # vLLM 推理服务器（HF safetensors）
 ├── llama-cpp/     # llama.cpp 推理服务器（GGUF）
@@ -62,7 +59,6 @@ TLS 证书来自三个不同的根：Traefik 自签发内部 CA（客户端只�
 | Stack | 角色 | 局域网 URL |
 |---|---|---|
 | [`traefik/`](traefik/) | HTTPS 反向代理，由 docker 标签驱动，自签发内部 CA | 发布 `:80`/`:443` |
-| [`cloudflare/`](cloudflare/) | Cloudflare Tunnel 连接器 —— 仅出站的公网入口 | 在 CF 控制台中按主机名配置 |
 | [`tailscale/`](tailscale/) | Tailscale sidecar —— 基于 WireGuard 的 tailnet 专属入口，可选的 Serve overlay 前置 `traefik` | `https://spark-1822.<tailnet>.ts.net` |
 | [`vllm/`](vllm/) | vLLM 推理服务器（HF safetensors），支持工具调用（默认 `qwen3_xml`，可按变体配置） | `https://vllm.spark-1822.local` |
 | [`llama-cpp/`](llama-cpp/) | GPU 加速的 llama.cpp 推理服务器（GGUF）。router 模式（默认）按需提供 HF 缓存中的任意 GGUF；同时支持经典单模型模式。兼容 OpenAI 的 API + Web 界面 | `https://llama.spark-1822.local` |
@@ -119,17 +115,7 @@ TLS 证书来自三个不同的根：Traefik 自签发内部 CA（客户端只�
    cd /opt/llama-cpp  && make up ENV=<variant>      # 参见 llama-cpp/envs/
    ```
 
-5. **（可选）通过 Cloudflare Tunnel 提供公网入口** —— 仅当你需要可从互联网访问的 URL 时才需要：
-
-   ```bash
-   cd /opt/cloudflare
-   cp .env.example .env             # 从 CF 控制台粘贴 CLOUDFLARE_TUNNEL_TOKEN
-   docker compose up -d
-   ```
-
-   然后在 Cloudflare 控制台配置 Public Hostnames，使其转发到 `http://traefik:80` 并带上对应的内部 Host 请求头（具体做法见 [`cloudflare/README.md`](cloudflare/README.md)）。
-
-6. **（可选）通过 Tailscale 提供 tailnet 入口** —— 仅当你需要让此主机可从你的 tailnet 访问时才需要：
+5. **（可选）通过 Tailscale 提供 tailnet 入口** —— 仅当你需要让此主机可从你的 tailnet 访问时才需要：
 
    ```bash
    cd /opt/tailscale

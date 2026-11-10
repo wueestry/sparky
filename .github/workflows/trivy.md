@@ -14,7 +14,7 @@ Workflow: [`trivy.yml`](trivy.yml). Scans every container image we deploy plus t
 | Job | What it scans |
 |---|---|
 | `extract-tags` | Reads the image tag from each stack's `.env.example` (`*_TAG=` line) and exposes the values as job outputs. Tags are floating by repo convention (`latest`, `v2`, `server-cuda`, etc.); operators pin in their host-local `.env`. |
-| `image-scan` (matrix) | CVE scan of each image at the committed `.env.example` tag: `ollama/ollama`, `ghcr.io/open-webui/open-webui`, `netdata/netdata`, `ghcr.io/ggml-org/llama.cpp`, `vllm/vllm-openai`, `traefik`, `cloudflare/cloudflared`, `tailscale/tailscale`. Severity HIGH+CRITICAL, fixed-only. **Gate-only** — printed to the run log and gated on CRITICAL; **not** uploaded to Code Scanning (see below). |
+| `image-scan` (matrix) | CVE scan of each image at the committed `.env.example` tag: `ollama/ollama`, `ghcr.io/open-webui/open-webui`, `netdata/netdata`, `ghcr.io/ggml-org/llama.cpp`, `vllm/vllm-openai`, `traefik`, `tailscale/tailscale`. Severity HIGH+CRITICAL, fixed-only. **Gate-only** — printed to the run log and gated on CRITICAL; **not** uploaded to Code Scanning (see below). |
 | `config-scan` | Trivy IaC config check across the whole repo (compose misconfig, etc.). |
 | `secret-scan` | Filesystem scan for accidentally-committed secrets. |
 

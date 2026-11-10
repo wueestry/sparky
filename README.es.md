@@ -11,7 +11,6 @@ Configuración para la estación de trabajo [NVIDIA DGX Spark](https://amzn.to/4
 - **vLLM** y **llama.cpp** para inferencia (safetensors de HF y GGUF respectivamente, ambos acelerados por GPU en la GB10).
 - **Open WebUI + Ollama** para la interfaz de chat.
 - **Traefik** como proxy inverso HTTPS delante de todo (controlado por etiquetas de Docker, emite su propia CA interna).
-- **Cloudflare Tunnel** para ingreso público solo de salida (sin puertos entrantes en el host).
 - **Tailscale** como sidecar para ingreso exclusivo a la tailnet (peer-to-peer sobre WireGuard; sin DNS público, sin puertos públicos).
 - **Netdata** para observabilidad en tiempo real.
 - Ayudante **mDNS** que publica alias `<sub>.spark-1822.local` en la LAN.
@@ -19,24 +18,22 @@ Configuración para la estación de trabajo [NVIDIA DGX Spark](https://amzn.to/4
 
 ## Topología
 
-Tres rutas de ingreso hacia los mismos backends:
+Dos rutas de ingreso hacia los mismos backends:
 
 ```
 cliente LAN      ──(mDNS *.spark-1822.local)──>  traefik :80/:443  ──>  backend
-cliente público  ──(DNS, borde de Cloudflare)──>  cloudflared ──>  traefik :80  ──>  backend
 cliente tailnet  ──(MagicDNS, WireGuard)──>  tailscale :443  ──>  traefik :80  ──>  backend
 ```
 
-Los backends (`vllm`, `llama-cpp`, `open-webui`, `ollama`) están todos en una única red Docker compartida llamada `traefik` — definida por el stack `traefik/`, a la que todos los demás se unen como `external: true`. El proxy activo y ambos conectores de túnel/sidecar se conectan a esa misma red y llaman directamente a los contenedores por nombre. `netdata` es la excepción: se ejecuta con `network_mode: host` (necesario para la telemetría a nivel de PID/proc del host), por lo que no tiene un endpoint en la red `traefik` — Traefik lo alcanza mediante una ruta estática a `host.docker.internal:19999` en `traefik/dynamic/services.yml` en lugar de DNS por nombre de contenedor.
+Los backends (`vllm`, `llama-cpp`, `open-webui`, `ollama`) están todos en una única red Docker compartida llamada `traefik` — definida por el stack `traefik/`, a la que todos los demás se unen como `external: true`. El proxy activo y el sidecar de Tailscale se conectan a esa misma red y llaman directamente a los contenedores por nombre. `netdata` es la excepción: se ejecuta con `network_mode: host` (necesario para la telemetría a nivel de PID/proc del host), por lo que no tiene un endpoint en la red `traefik` — Traefik lo alcanza mediante una ruta estática a `host.docker.internal:19999` en `traefik/dynamic/services.yml` en lugar de DNS por nombre de contenedor.
 
-El TLS proviene de tres raíces distintas: Traefik emite su propia CA interna (los clientes instalan `traefik-root.crt` una sola vez); Cloudflare provee certificados de confianza pública en su borde para los hostnames del túnel; Tailscale aprovisiona automáticamente certificados MagicDNS de confianza pública para el hostname de la tailnet.
+El TLS proviene de dos raíces distintas: Traefik emite su propia CA interna (los clientes instalan `traefik-root.crt` una sola vez); Tailscale aprovisiona automáticamente certificados MagicDNS de confianza pública para el hostname de la tailnet.
 
 ## Estructura
 
 ```
 .
 ├── traefik/       # Proxy inverso HTTPS (controlado por etiquetas de Docker)
-├── cloudflare/    # Conector de Cloudflare Tunnel — ingreso público
 ├── tailscale/     # Sidecar de Tailscale — ingreso a la tailnet
 ├── vllm/          # Servidor de inferencia vLLM (safetensors de HF)
 ├── llama-cpp/     # Servidor de inferencia llama.cpp (GGUF)
@@ -62,7 +59,6 @@ Cada stack tiene su propio `README.md` — empieza ahí para detalles de desplie
 | Stack | Rol | URL en la LAN |
 |---|---|---|
 | [`traefik/`](traefik/) | Proxy inverso HTTPS, controlado por etiquetas de Docker, emite su propia CA interna | publica `:80`/`:443` |
-| [`cloudflare/`](cloudflare/) | Conector de Cloudflare Tunnel — ingreso público solo de salida | configurable por hostname en el panel de CF |
 | [`tailscale/`](tailscale/) | Sidecar de Tailscale — ingreso exclusivo a la tailnet sobre WireGuard, overlay opcional de Serve delante de `traefik` | `https://spark-1822.<tailnet>.ts.net` |
 | [`vllm/`](vllm/) | Servidor de inferencia vLLM (safetensors de HF), con tool-calling (`qwen3_xml` por defecto, configurable por variante) | `https://vllm.spark-1822.local` |
 | [`llama-cpp/`](llama-cpp/) | Servidor de inferencia llama.cpp acelerado por GPU (GGUF). El modo router (por defecto) sirve bajo demanda cada GGUF de la caché de HF; también se admite el modo clásico de un solo modelo. API compatible con OpenAI + interfaz web | `https://llama.spark-1822.local` |
@@ -119,17 +115,7 @@ En un host nuevo, en este orden:
    cd /opt/llama-cpp  && make up ENV=<variante>      # ver llama-cpp/envs/
    ```
 
-5. **(Opcional) Ingreso público vía Cloudflare Tunnel** — solo si quieres URLs alcanzables desde internet:
-
-   ```bash
-   cd /opt/cloudflare
-   cp .env.example .env             # pega CLOUDFLARE_TUNNEL_TOKEN desde el panel de CF
-   docker compose up -d
-   ```
-
-   Luego configura los Public Hostnames en el panel de Cloudflare para que reenvíen a `http://traefik:80` con el encabezado Host interno correspondiente (receta en [`cloudflare/README.md`](cloudflare/README.md)).
-
-6. **(Opcional) Ingreso a la tailnet vía Tailscale** — solo si quieres que este host sea alcanzable desde tu tailnet:
+5. **(Opcional) Ingreso a la tailnet vía Tailscale** — solo si quieres que este host sea alcanzable desde tu tailnet:
 
    ```bash
    cd /opt/tailscale

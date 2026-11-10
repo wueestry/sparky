@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Removed
 
+- **`cloudflare/` stack (Cloudflare Tunnel).** Public ingress via `cloudflared` is gone; the host now has two ingress paths, LAN (mDNS → Traefik) and tailnet (Tailscale → Traefik). Also removed: the `cloudflared` entry in the Trivy image-scan matrix and `extract-tags`, and every Cloudflare reference in the READMEs (English, Spanish, Russian, Chinese) and the per-stack docs. Traefik routers are unchanged: they match any `<svc>.<domain>` host, so nothing in `traefik/` needed touching. Older changelog entries are left as written.
+  - **Host migration**: `cd /opt/cloudflare && docker compose down` **before** `git pull` (the pull deletes the compose file), then delete the tunnel (and its public hostnames/DNS records) in the Cloudflare Zero Trust dashboard and revoke the token. If `llama-cpp` was exposed through the tunnel with `LLAMA_API_KEY` as the only protection, that exposure ends with the tunnel.
 - `tailscale/services.json` and `make services-apply` / `services-clear`: superseded by the declarative `Services` block in `serve.json`. `make services-status` is replaced by `make status` (live serve config + `AdvertiseServices`).
 - Legacy `svc:spark` is no longer advertised by this node; delete it in the admin console.
 
