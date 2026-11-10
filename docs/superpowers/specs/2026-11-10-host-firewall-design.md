@@ -3,7 +3,7 @@
 **Status:** proposed, not implemented. The reference ruleset in the appendix was loaded and exercised in a throwaway network namespace (nft 1.1.6, 18 behavioural checks, all passing); nothing here has run on `spark-1822` yet. Section 10 lists what must be confirmed there first.
 **Date:** 2026-11-10.
 **Services:** new `firewall/`; touches `tailscale/`, `litellm/`, `open-webui/`, `models/qwen38/`, top-level `README.md`, `CHANGELOG.md`.
-**Depends on:** three changes that are still open or unpushed when this is written: the retirement of `vllm/`, `llama-cpp/` and Ollama (PR #8), the Netdata removal (PR #9), and moving Tailscale to a host service. This spec assumes all three have landed.
+**Depends on:** the retirement of `vllm/`, `llama-cpp/` and Ollama (PR #8, merged), the Netdata removal (PR #9), and moving Tailscale to a host service. This spec assumes all three have landed.
 
 ## Goal
 
@@ -12,7 +12,7 @@ Block all network access to and from the Spark except:
 - the **local network**, `192.168.1.0/24`, and
 - **Tailscale**,
 
-and make the exceptions that real operations need (image pulls, model downloads, `git pull`, OS updates) explicit, time-boxed and auditable, instead of leaving the internet permanently open.
+**Nothing else is reachable by default.** That explicitly includes every container registry (`docker.io`, `ghcr.io`, `nvcr.io`), Hugging Face, GitHub and the OS package mirrors: there is no hostname or registry allow-list. When an operation needs the internet (image pulls, model downloads, `git pull`, OS updates), the operator **disables the firewall on purpose** (`make disable`), does the work, and **re-enables it** (`make enable`). The disabled state is temporary by construction (it re-enables itself after a timeout, and always on reboot) and visible (`make status`, the journal).
 
 The point is containment as much as exposure: the host runs images this repo does not build (Open WebUI has shipped CRITICAL CVEs in its Python dependencies), loads multi-GB model files, and holds the GPU. A compromised container should have no path to the internet.
 
@@ -45,7 +45,7 @@ Docker is **rootless**. That matters for how a host firewall sees container traf
 
 ### What needs outbound access, and when
 
-Steady state needs almost nothing: model loading is offline (`HF_HUB_OFFLINE=1`), Traefik has update checks and usage reports off, and TensorFold's update check is off. What needs the internet is *operations*:
+Steady state needs almost nothing: model loading is offline (`HF_HUB_OFFLINE=1`), Traefik has update checks and usage reports off, and TensorFold's update check is off. What needs the internet is *operations*. **None of these destinations is allowed by default**; each is reachable only while the firewall is disabled (or an egress window is open, decision 9):
 
 | Operation | Destinations |
 |---|---|
@@ -75,7 +75,8 @@ Consequence: a default-deny `OUTPUT` policy that allows only the LAN already giv
 6. **Identity for `tailscaled` is its socket mark, not its cgroup.** `tailscaled` sets `SO_MARK = 0x80000` (mask `0xff0000`) on every non-loopback socket it creates, so its packets can be matched with `meta mark & 0xff0000 == 0x80000`. A cgroup match (`socket cgroupv2 … "system.slice/tailscaled.service"`) was considered and rejected: nft resolves the path to a cgroup ID at load time, so the ruleset fails to load when the service isn't running, and the rule would go stale each time `tailscaled` restarts and gets a new cgroup. Only root can set that mark.
 7. **NTP is allowed by user, not destination**: `meta skuid systemd-timesync … udp dport 123`. (Accurate time is required for Tailscale's TLS; `timesyncd`'s default pool servers are on the internet.)
 8. **Outbound blocks are `reject`ed, inbound blocks are `drop`ped.** A rejected connect fails in milliseconds (measured 0.04 s in the namespace test) instead of stalling for a timeout, which keeps `docker pull` and friends from hanging with no explanation. Silently dropping inbound gives scanners nothing.
-9. **Egress for operations is a maintenance window**, implemented as an nft set element with its own timeout (`0.0.0.0/0 timeout 15m`). It closes by itself even if the shell that opened it dies, needs no daemon or timer, and has a hard upper bound in the Make target. (Tested: opens, closes on its own after the timeout, can be closed early.)
+9. **The internet is closed by default, including every container registry, and is reached by explicitly disabling the firewall.** `make disable` removes the whole `sparky_fw` table (inbound filtering too: everything is open while it is off) and arms a re-enable timer (default 30 min, capped at 240); `make enable` re-loads the ruleset immediately and cancels the timer. The disabled state is runtime-only: the boot unit stays enabled, so a reboot always comes back filtered, and the timer means a forgotten `disable` cannot last. There is no per-registry exception list; if a standing exception is ever wanted that is the FQDN allow-list under "Future work", not part of this change.
+   - A **narrower alternative** is kept for when inbound filtering should stay on: `make open MINUTES=15` adds `0.0.0.0/0 timeout 15m` to an nft set, which opens *egress only* and closes by itself with no timer or daemon. (Tested: opens, closes on its own after the timeout, can be closed early.) Use `disable` when you want everything open, `open` when you only need to reach out.
 10. **`tailscaled` must stop managing netfilter** (`tailscale set --netfilter-mode=off`). Otherwise two sets of base chains both have to accept the same packet, and Tailscale's `ts-input` chain duplicates, and can disagree with, this ruleset. The anti-spoofing rule it would have installed (tailnet-range source from another interface) is part of this ruleset instead.
 11. **Roll out in audit mode first.** The same ruleset can be rendered so that every would-be block logs (with the owning UID) and accepts. It runs for a few days before enforcement, so the first enforcing load is not a guess.
 12. **Applying a ruleset is confirm-or-revert**, because a mistake here locks out SSH.
@@ -131,7 +132,8 @@ tailnet ── tailscale0 ──── accept (tailnet ACLs) ──────�
                     │ output: LAN ✔   tailscale0 ✔   tailscaled (mark 0x80000) ✔   NTP (timesyncd) ✔        │
 internet ◀──────────┤         rootless Docker user (all containers) ✘ ── reject                              │
                     │         root apt / git / hf ✘ ── reject, unless:                                       │
-                    │         `make open MINUTES=15` → set element 0.0.0.0/0 timeout 15m                      │
+                    │         `make disable` → table removed, auto re-enable timer;  `make enable` → back    │
+                    │         (narrower: `make open MINUTES=15` → egress-only set element, self-expiring)    │
                     └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -183,9 +185,11 @@ counter accept
 | `make apply` | `check`, keep the previous ruleset as `ruleset.nft.prev`, load the new one, **arm a revert timer** (`systemd-run --on-active=$(REVERT_SECONDS) --unit=sparky-fw-revert …`, default 120 s) that loads `ruleset.nft.prev` (or deletes the table if there was none) |
 | `make confirm` | Stops the revert timer. Run it from a *second* SSH session after verifying access |
 | `make revert` | Runs the revert immediately |
-| `make open MINUTES=15` | Adds `0.0.0.0/0 timeout <n>m` to `maint_dst`; `MINUTES` capped at 120 (default 15) |
-| `make close` | Deletes the element |
-| `make status` | `nft list table inet sparky_fw` (rule counters, set elements with *remaining* timeout), the mode, whether a revert timer is armed |
+| `make disable [MINUTES=30]` | **Turns the firewall off** (`nft delete table inet sparky_fw`), logs `sparky-fw: DISABLED`, and arms the re-enable timer (`systemd-run --on-active=<n>m --unit=sparky-fw-reenable …` running `make enable`'s load). `MINUTES` is capped at 240. Runtime-only: the boot unit is untouched |
+| `make enable` | **Turns it back on now**: loads `/etc/sparky-firewall/ruleset.nft` (same atomic load as `apply`, without the revert timer) and cancels the re-enable timer. Idempotent; also the fix after any manual tampering |
+| `make open MINUTES=15` | Narrower than `disable`: adds `0.0.0.0/0 timeout <n>m` to `maint_dst`, opening egress only; `MINUTES` capped at 120 (default 15) |
+| `make close` | Deletes that element |
+| `make status` | **Prominently** one of `ENFORCING` / `AUDIT` / `DISABLED (re-enables in 12m)`; then `nft list table inet sparky_fw` (rule counters, set elements with *remaining* timeout) and whether a revert or re-enable timer is armed |
 | `make logs` | `journalctl -k` filtered to `sparky-fw` |
 | `make audit-report` | Summarises audit-mode log lines by (UID, proto, destination, port) with counts, so allow-list decisions are made from data |
 
@@ -223,7 +227,7 @@ The `meta skuid systemd-timesync` rule needs that user to exist at load time. It
 | `tailscale/README.md` | New "Firewall" section: why `netfilter-mode=off`, that `iifname tailscale0` is the tailnet entry point, that `tailscaled` egress is allowed by its socket mark |
 | `litellm/docker-compose.yml` | Telemetry off: `LITELLM_TELEMETRY=False` (verify the exact variable against the pinned image). Purely to stop noisy blocked attempts; the firewall is the enforcement |
 | `open-webui/docker-compose.yml` | Update checks and online features off: `ENABLE_VERSION_UPDATE_CHECK=false`, and `OFFLINE_MODE=true` if the pinned version supports it (verify). Same rationale |
-| `models/qwen38/README.md` | `make prepare` (image pull, ~96 GiB download) now needs a maintenance window: `make -C /opt/firewall open MINUTES=60`. `make up` and serving are unaffected (offline) |
+| `models/qwen38/README.md` | `make prepare` (image pull, ~96 GiB download) now needs the internet, which is closed by default: `make -C /opt/firewall disable MINUTES=90`, then `make prepare`, then `make -C /opt/firewall enable`. `make up` and serving are unaffected (offline) |
 | `README.md` | Layout, Components, first-time setup step (after Traefik, Tailscale, before exposing services), and **Deploy workflow**: the `git pull` over SSH now happens inside a window |
 | `CHANGELOG.md` | Added entry with the ordered host rollout |
 | `docs/` | This spec |
@@ -231,9 +235,12 @@ The `meta skuid systemd-timesync` rule needs that user to exist at load time. It
 README deploy workflow, as it becomes:
 
 ```bash
-ssh spark-1822.local 'make -C /opt/firewall open MINUTES=10 && sudo git -C /opt pull --ff-only --recurse-submodules'
-# the window closes by itself; `make -C /opt/firewall close` to end it early
+ssh spark-1822.local 'make -C /opt/firewall disable MINUTES=10 \
+  && sudo git -C /opt pull --ff-only --recurse-submodules; make -C /opt/firewall enable'
+# `enable` runs even if the pull failed; if the connection drops first, the timer re-enables it
 ```
+
+Pulling images is the same pattern: `make disable`, `docker compose pull` (or `make prepare`), `make enable`.
 
 (Open question 1 covers the alternative: a push-based deploy so the host needs no internet at all.)
 
@@ -252,9 +259,9 @@ ssh spark-1822.local 'make -C /opt/firewall open MINUTES=10 && sudo git -C /opt 
 |---|---|---|
 | Serve models, use Open WebUI/LiteLLM from LAN or tailnet | works | **unchanged** |
 | Admin over SSH from LAN or tailnet | works | **unchanged** |
-| `git pull` on the host | direct | inside `make open` window, or push-based (open question 1) |
-| `make prepare` (image, checkpoint) | direct | window of up to 60+ min |
-| `docker pull` / OS updates | direct | window |
+| `git pull` on the host | direct | `make disable` … `make enable`, or push-based (open question 1) |
+| `make prepare` (image, checkpoint) | direct | `make disable MINUTES=90` … `make enable` |
+| `docker pull` (docker.io, ghcr.io, nvcr.io) / OS updates | direct | **blocked by default**; `make disable` … `make enable` |
 | A container calling home (telemetry, version checks, SSRF/exfil from a compromised image) | works | **rejected and logged** |
 | Tailscale | works | works (allowed by identity) |
 
@@ -268,6 +275,7 @@ Runs without root, in a user+network namespace (`unshare -Urnm`) with a veth-con
 - **Outbound:** host → LAN peer allowed; host → "internet" rejected, **fast** (well under the connect timeout); loopback allowed; IPv6 to the peer rejected; `::1` allowed.
 - **Identity:** a socket carrying mark `0x80000` reaches the "internet"; one carrying a different mark in the same byte does not.
 - **Maintenance window:** opens; closes on its own after its timeout; can be closed early; reopening works.
+- **Disable / enable:** after `disable` the "internet" is reachable *and* an unlisted LAN port is open (the whole firewall is off); after `enable` both are blocked again; `enable` is idempotent and works when the table is already loaded; `disable` arms the re-enable timer and `enable` cancels it (the timer command is stubbed: `systemd-run` is not available in the namespace); `MINUTES` above the cap is refused.
 - **Reload:** loading the ruleset twice is idempotent and keeps access working.
 - **Audit mode:** renders, loads, and accepts what enforce mode would reject (and logs it).
 - **Render:** every placeholder is substituted; `nft -c` passes for both modes.
@@ -280,7 +288,8 @@ Needs `nft`, `ip`, `python3`, and unprivileged user namespaces; the test skips w
 2. From a tailnet device: `https://litellm.<tailnet>.ts.net` and `https://spark-1822.<tailnet>.ts.net` work.
 3. On the host: `curl -m 5 https://example.com` fails **immediately**; `docker run --rm alpine wget -T 5 -qO- https://example.com` fails immediately.
 4. `tailscale status` stays healthy through a `tailscaled` restart (the mark rule survives it; a cgroup rule would not).
-5. `make open MINUTES=1`: (3) succeeds, then fails again about a minute later with no further action.
+5. `make disable MINUTES=1`: (3) succeeds, `docker pull alpine` succeeds, `make status` says `DISABLED (re-enables in …)`; about a minute later it fails again with no further action and `make status` says `ENFORCING`. Then `make disable` followed by `make enable`: blocked again **immediately**, and the timer is gone (`systemctl list-timers sparky-fw-reenable*`).
+5a. `make open MINUTES=1`: egress works for a minute while an unlisted inbound port stays closed.
 6. Reboot: the ruleset is loaded before the network is up (`nft list table inet sparky_fw` immediately after boot; no connectivity window before it).
 7. `make logs` shows blocked attempts with their UID; `make status` shows counters moving.
 8. `make apply` with a deliberately bad ruleset leaves the old one active (validation) and, with a valid-but-locking ruleset, reverts itself after `REVERT_SECONDS`.
@@ -300,6 +309,7 @@ Each of these is an assumption above. None changes the *goal*; each could change
 | 7 | `ufw` and `nftables.service` state | `ufw status`; `systemctl is-enabled nftables` | Disable `ufw`; make sure the stock `nftables.service` can't `flush ruleset` over this table |
 | 8 | nft version on the host supports every expression used (priority keyword, `reject with icmpx`, interval+timeout sets) | `nft --version`, `nft -c -f` on the rendered file | Rewrite the offending expression; the test suite pins a minimum |
 | 9 | Is IPv6 configured on the LAN interface | `ip -6 addr` | Blocking it is intended either way; confirm nothing on the host relies on it |
+| 10 | What happens to a long download that is running when the firewall re-enables (and to one started during a `disable`) | Start `docker pull` of a large image during `make disable MINUTES=1`; watch it across the re-enable | If it resets reliably, document "re-enable after the pull" as the rule and consider an opt-in `enable --wait-idle` |
 
 ## Rollout
 
@@ -315,12 +325,14 @@ Each of these is an assumption above. None changes the *goal*; each could change
 | Risk | Mitigation |
 |---|---|
 | Lockout from SSH | `nft -c` validation; confirm-or-revert; audit period; apply from a LAN session with Tailscale as a second way in |
-| A needed destination discovered only after enforcement | Audit mode with UID logging first; `make open` for anything operational |
+| A needed destination discovered only after enforcement | Audit mode with UID logging first; `make disable` for anything operational (no per-destination exceptions) |
 | `tailscaled` breaks (control plane or relays unreachable) | Identity-based, so IP changes don't matter; acceptance step 4; `make revert` |
 | Clock drift (blocked NTP) breaks Tailscale TLS | NTP allowed by user; spike item 5 |
 | `nftables.service` / `ufw` / another tool flushes or shadows the table | `make check` detects both; the unit manages only its own table |
 | A cgroup- or user-based match fails at load (missing user) | `make check` verifies; the mark rule is deliberately load-time-independent |
-| Maintenance window left open | Mandatory timeout, 120-minute cap, visible in `make status` |
+| Firewall left disabled (everything, inbound included, is open) | Mandatory re-enable timer (default 30 min, cap 240); a reboot always restores it; `make status` and the journal show `DISABLED`; prefer `make open` when inbound filtering should stay on |
+| Egress window left open | Mandatory timeout, 120-minute cap, visible in `make status` |
+| A transfer in flight when the firewall re-enables is cut | Connections made while it was off were not tracked by conntrack; they are picked up mid-stream and usually survive, but may reset (spike item 10). Re-enable *after* the pull finishes, and size `MINUTES` generously |
 | Ruleset fails to load at boot | Fail open, unit fails loudly; validation makes it unlikely |
 | Updates are forgotten because the host can't reach the internet on its own | Documented windows in the deploy workflow; a weekly timer that opens one is possible but out of scope |
 | Open WebUI / LiteLLM features that need the internet (web search, remote image fetch) silently stop | Expected and desirable; documented in their READMEs |
@@ -336,7 +348,7 @@ Each of these is an assumption above. None changes the *goal*; each could change
 
 - FQDN-based permanent exceptions: dnsmasq with `nftset=` populating an allow-set, for anything that turns out to need standing egress.
 - Docker `internal: true` networks as a second wall under the host rules.
-- A scheduled weekly maintenance window for updates.
+- A scheduled weekly disable window for updates (with `make enable` at the end), if remembering to patch becomes a problem.
 - Narrowing LAN access further (per-service source addresses).
 - Enabling IPv6, if it is ever wanted.
 
