@@ -110,7 +110,7 @@ curl -k https://ollama.spark-1822.local/api/tags
 OLLAMA_HOST=https://ollama.spark-1822.local ollama list
 ```
 
-No auth: trusted-LAN posture, same rationale as Netdata. Note that the Ollama REST API includes destructive endpoints (delete model, pull arbitrary model); anyone on the LAN can use them.
+No auth: trusted-LAN posture. Note that the Ollama REST API includes destructive endpoints (delete model, pull arbitrary model); anyone on the LAN can use them.
 
 ## Pull models
 

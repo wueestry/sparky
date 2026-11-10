@@ -12,7 +12,6 @@ Configuration for the [NVIDIA DGX Spark](https://amzn.to/47ZeWqZ) workstation `s
 - **Open WebUI + Ollama** for the chat UI.
 - **Traefik** as the HTTPS reverse proxy in front of everything (docker-label-driven, mints its own internal CA).
 - **Tailscale** sidecar for tailnet-only ingress (peer-to-peer over WireGuard; no public DNS, no public ports).
-- **Netdata** for real-time observability.
 - **mDNS** helper publishing `<sub>.spark-1822.local` aliases on the LAN.
 
 ## Topology
@@ -24,7 +23,7 @@ LAN client      ──(mDNS *.spark-1822.local)──>  traefik :80/:443  ──
 tailnet client  ──(MagicDNS, WireGuard)──>  tailscale :443  ──>  traefik :80  ──>  backend
 ```
 
-Backends (`vllm`, `llama-cpp`, `litellm`, the stacks under `models/`, `open-webui`, `ollama`) all sit on a single shared Docker network named `traefik` — defined by the `traefik/` stack, joined as `external: true` by everyone else. The active proxy and the Tailscale sidecar each attach to the same network and dial container names directly. `netdata` is the exception: it runs with `network_mode: host` (needed for host-level PID/proc telemetry), so it has no endpoint on the `traefik` network — Traefik reaches it via a static route to `host.docker.internal:19999` in `traefik/dynamic/services.yml` instead of container-name DNS.
+Backends (`vllm`, `llama-cpp`, `litellm`, the stacks under `models/`, `open-webui`, `ollama`) all sit on a single shared Docker network named `traefik` — defined by the `traefik/` stack, joined as `external: true` by everyone else. The active proxy and the Tailscale sidecar each attach to the same network and dial container names directly.
 
 TLS comes from two different roots: Traefik mints its own internal CA (clients install `traefik-root.crt` once); Tailscale auto-provisions publicly-trusted MagicDNS certs for the tailnet hostname.
 
@@ -39,7 +38,6 @@ TLS comes from two different roots: Traefik mints its own internal CA (clients i
 ├── models/        # one subfolder per model recipe (qwen38/ …), served behind litellm
 ├── litellm/       # LiteLLM gateway (+ Postgres) in front of models/
 ├── open-webui/    # Open WebUI + Ollama (chat UI)
-├── netdata/       # Real-time observability
 ├── mdns/          # Host-side mDNS aliases helper
 ├── docs/          # Design/planning docs (e.g. llama-cpp router-mode spec)
 ├── Makefile       # top-level LLM-engine control (up / down / list)
@@ -62,7 +60,6 @@ Each stack has its own `README.md` — start there for deploy / configure / upgr
 | [`models/qwen38/`](models/qwen38/) | Qwen3.8 Flash Next on TensorFold (MiaAI-Lab recipe as an unpatched submodule, rootless-compatible, ~5 concurrent streams, 262k context). Reached only through LiteLLM | `127.0.0.1:8888` on the host; no router of its own |
 | [`litellm/`](litellm/) | LiteLLM OpenAI-compatible gateway + Postgres: one endpoint and key set for every model under `models/` | `https://litellm.spark-1822.local` |
 | [`open-webui/`](open-webui/) | Open WebUI + Ollama (GPU on Ollama only) | `https://open-webui.spark-1822.local`, `https://ollama.spark-1822.local` |
-| [`netdata/`](netdata/) | Real-time host + container telemetry | `https://netdata.spark-1822.local` |
 | [`mdns/`](mdns/) | Host systemd template publishing `<sub>.spark-1822.local` mDNS aliases | host-level |
 
 ## Host
@@ -102,14 +99,13 @@ On a fresh host, in order:
 
    ```bash
    cd /opt/mdns
-   for a in traefik vllm llama litellm ollama open-webui netdata; do make add ALIAS=$a; done
+   for a in traefik vllm llama litellm ollama open-webui; do make add ALIAS=$a; done
    ```
 
 4. **Bring up the services** — each one attaches to the `traefik` network and Traefik auto-routes via the `traefik.*` labels in its compose:
 
    ```bash
    cd /opt/open-webui && cp .env.example .env && docker compose up -d
-   cd /opt/netdata    && cp .env.example .env && docker compose up -d
    cd /opt/vllm       && make up ENV=<variant>      # see vllm/envs/
    cd /opt/llama-cpp  && make up ENV=<variant>      # see llama-cpp/envs/
    ```
