@@ -6,13 +6,11 @@
 
 Configuration for the [NVIDIA DGX Spark](https://amzn.to/47ZeWqZ) workstation `spark-1822` — a single-box, self-hosted LLM setup:
 
-- **vLLM** and **llama.cpp** for inference (HF safetensors and GGUF respectively, both GPU-accelerated on the GB10).
-- **`models/`** — one stack per self-contained model recipe, starting with **Qwen3.8 Flash Next** on [MiaAI-Lab's TensorFold recipe](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold) (vendored as an unpatched git submodule).
+- **`models/`** — one stack per self-contained model recipe, GPU-accelerated on the GB10, starting with **Qwen3.8 Flash Next** on [MiaAI-Lab's TensorFold recipe](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold) (vendored as an unpatched git submodule, rootless-compatible).
 - **LiteLLM** as the OpenAI-compatible gateway in front of the models (keys, routing, spend tracking).
-- **Open WebUI + Ollama** for the chat UI.
+- **Open WebUI** for the chat UI, over LiteLLM.
 - **Traefik** as the HTTPS reverse proxy in front of everything (docker-label-driven, mints its own internal CA).
 - **Tailscale** as a host service (kernel mode) for tailnet-only ingress (peer-to-peer over WireGuard; no public DNS, no public ports).
-- **Netdata** for real-time observability.
 - **mDNS** helper publishing `<sub>.spark-1822.local` aliases on the LAN.
 
 ## Topology
@@ -24,7 +22,7 @@ LAN client      ──(mDNS *.spark-1822.local)──>  traefik :80/:443  ──
 tailnet client  ──(MagicDNS, WireGuard)──>  tailscaled :443  ──>  traefik 127.0.0.1:80/443  ──>  backend
 ```
 
-Backends (`vllm`, `llama-cpp`, `litellm`, the stacks under `models/`, `open-webui`, `ollama`) all sit on a single shared Docker network named `traefik` — defined by the `traefik/` stack, joined as `external: true` by everyone else. The proxy attaches to the same network and dials container names directly; Tailscale runs on the host, outside Docker, and reaches Traefik through its published ports. `netdata` is the exception: it runs with `network_mode: host` (needed for host-level PID/proc telemetry), so it has no endpoint on the `traefik` network — Traefik reaches it via a static route to `host.docker.internal:19999` in `traefik/dynamic/services.yml` instead of container-name DNS.
+Backends (`litellm`, the stacks under `models/`, `open-webui`) all sit on a single shared Docker network named `traefik` — defined by the `traefik/` stack, joined as `external: true` by everyone else. The proxy attaches to the same network and dials container names directly; Tailscale runs on the host, outside Docker, and reaches Traefik through its published ports.
 
 TLS comes from two different roots: Traefik mints its own internal CA (clients install `traefik-root.crt` once); Tailscale auto-provisions publicly-trusted MagicDNS certs for the tailnet hostname.
 
@@ -34,15 +32,12 @@ TLS comes from two different roots: Traefik mints its own internal CA (clients i
 .
 ├── traefik/       # HTTPS reverse proxy (docker-label-driven)
 ├── tailscale/     # Tailscale host service — declarative Serve config + apply helper
-├── vllm/          # vLLM inference server (HF safetensors)
-├── llama-cpp/     # llama.cpp inference server (GGUF)
 ├── models/        # one subfolder per model recipe (qwen38/ …), served behind litellm
 ├── litellm/       # LiteLLM gateway (+ Postgres) in front of models/
-├── open-webui/    # Open WebUI + Ollama (chat UI)
-├── netdata/       # Real-time observability
+├── open-webui/    # Open WebUI (chat UI over litellm)
 ├── mdns/          # Host-side mDNS aliases helper
-├── docs/          # Design/planning docs (e.g. llama-cpp router-mode spec)
-├── Makefile       # top-level LLM-engine control (up / down / list)
+├── docs/          # Design/planning docs (historical: the retired llama-cpp router mode)
+├── Makefile       # top-level service control (up / down)
 ├── sparky.svg     # Project logo (AI self-portrait)
 ├── CHANGELOG.md
 ├── LICENSE
@@ -57,12 +52,9 @@ Each stack has its own `README.md` — start there for deploy / configure / upgr
 |---|---|---|
 | [`traefik/`](traefik/) | HTTPS reverse proxy, docker-label-driven, mints its own internal CA | publishes `:80`/`:443` |
 | [`tailscale/`](tailscale/) | Tailscale as a host service (`tailscaled`, kernel mode) — tailnet-only ingress over WireGuard; Serve config fronts `traefik`, applied by a small helper | `https://spark-1822.<tailnet>.ts.net` |
-| [`vllm/`](vllm/) | vLLM inference server (HF safetensors), tool-calling (`qwen3_xml` by default, set per variant) | `https://vllm.spark-1822.local` |
-| [`llama-cpp/`](llama-cpp/) | llama.cpp GPU-accelerated inference server (GGUF). Router mode (default) serves every GGUF in the HF cache on demand; classic single-model mode also supported. OpenAI-compatible API + web UI | `https://llama.spark-1822.local` |
 | [`models/qwen38/`](models/qwen38/) | Qwen3.8 Flash Next on TensorFold (MiaAI-Lab recipe as an unpatched submodule, rootless-compatible, ~5 concurrent streams, 262k context). Reached only through LiteLLM | `127.0.0.1:8888` on the host; no router of its own |
 | [`litellm/`](litellm/) | LiteLLM OpenAI-compatible gateway + Postgres: one endpoint and key set for every model under `models/` | `https://litellm.spark-1822.local` |
-| [`open-webui/`](open-webui/) | Open WebUI + Ollama (GPU on Ollama only) | `https://open-webui.spark-1822.local`, `https://ollama.spark-1822.local` |
-| [`netdata/`](netdata/) | Real-time host + container telemetry | `https://netdata.spark-1822.local` |
+| [`open-webui/`](open-webui/) | Open WebUI chat UI, talking to LiteLLM (no GPU) | `https://open-webui.spark-1822.local` |
 | [`mdns/`](mdns/) | Host systemd template publishing `<sub>.spark-1822.local` mDNS aliases | host-level |
 
 ## Host
@@ -102,25 +94,21 @@ On a fresh host, in order:
 
    ```bash
    cd /opt/mdns
-   for a in traefik vllm llama litellm ollama open-webui netdata; do make add ALIAS=$a; done
+   for a in traefik litellm open-webui; do make add ALIAS=$a; done
    ```
 
-4. **Bring up the services** — each one attaches to the `traefik` network and Traefik auto-routes via the `traefik.*` labels in its compose:
+4. **Bring up the services** — each one attaches to the `traefik` network and Traefik auto-routes via the `traefik.*` labels in its compose.
 
-   ```bash
-   cd /opt/open-webui && cp .env.example .env && docker compose up -d
-   cd /opt/netdata    && cp .env.example .env && docker compose up -d
-   cd /opt/vllm       && make up ENV=<variant>      # see vllm/envs/
-   cd /opt/llama-cpp  && make up ENV=<variant>      # see llama-cpp/envs/
-   ```
-
-   The Qwen recipe is a git submodule and downloads ~96 GiB the first time; the gateway needs secrets in its `.env` (see [`litellm/README.md`](litellm/README.md)):
+   The Qwen recipe is a git submodule and downloads ~96 GiB the first time; the gateway needs secrets in its `.env` (see [`litellm/README.md`](litellm/README.md)); Open WebUI then needs a key *from* the gateway (see [`open-webui/README.md`](open-webui/README.md)):
 
    ```bash
    cd /opt && sudo git submodule update --init models/qwen38/upstream
    cd /opt/models/qwen38 && make prepare && make up      # see models/qwen38/README.md
    cd /opt/litellm       && cp .env.example .env         # fill the three secrets
    docker volume create litellm-db && docker compose up -d
+   # create a key for Open WebUI (litellm/README.md), then:
+   cd /opt/open-webui    && cp .env.example .env         # secret + LITELLM_API_KEY
+   docker volume create open-webui && docker compose up -d
    ```
 
 5. **(Optional) Tailnet ingress via Tailscale** — only if you want this host reachable from your tailnet. Tailscale runs on the host, not in Docker: install it from [Tailscale's package](https://tailscale.com/kb/1031/install-linux), then:
@@ -144,41 +132,38 @@ ssh spark-1822.local 'sudo git -C /opt pull --ff-only --recurse-submodules'
 
 After the pull, apply the change in the relevant stack (each stack's README has details):
 
-- **Inference stacks** (`vllm/`, `llama-cpp/`) — `cd /opt/<stack> && make up ENV=<variant>` to (re)start with a variant.
+- **Model stacks** (`models/<name>/`) — `cd /opt/models/<name> && make up`; to pick up a new upstream recipe commit, `make update` there first (see the stack's README).
 - **Traefik** — routing changes via Docker labels or `dynamic/*.yml` files are hot-reloaded; `docker compose restart traefik` only if `traefik.yml` itself changed.
 - **Other stacks** — `cd /opt/<name> && docker compose up -d`.
 
-Host-local files outside git stay put across pulls — each stack's `.env` (secrets), inference `envs/*.env` variants, TLS material (`*.crt`/`*.key`), and `*.bak` backups are all gitignored.
+Host-local files outside git stay put across pulls — each stack's `.env` (secrets), generated `.generated/` directories, TLS material (`*.crt`/`*.key`), and `*.bak` backups are all gitignored.
 
-## Managing the LLM engines
+## Managing the services
 
-The top-level [`Makefile`](Makefile) (at `/opt/Makefile` on the host) is a thin wrapper over the LLM services — it acts on **one engine at a time and never touches the others**:
+The top-level [`Makefile`](Makefile) (at `/opt/Makefile` on the host) is a thin wrapper over the LLM services — it acts on **one service at a time and never touches the others**:
 
 ```bash
-make up engine=vllm ENV=<variant>    # start one engine
-make up engine=llama-cpp             # llama-cpp with empty ENV = router mode
 make up engine=qwen38                # Qwen3.8 Flash Next (models/qwen38; `make prepare` there first)
 make up engine=litellm               # the gateway (no GPU)
-make down engine=ollama              # stop just that one; the rest keep running
-make list                            # model variants for vllm / llama-cpp
-make sync                            # after `hf download` or `git pull`: sync vllm + llama-cpp
+make up engine=open-webui            # the chat UI (no GPU)
+make down engine=qwen38              # stop just that one; the rest keep running
 ```
 
-Engines are `vllm`, `llama-cpp`, `qwen38`, `litellm`, `ollama`, `open-webui`. `up engine=vllm|llama-cpp|qwen38` delegates to that stack's own `make up` (so `ENV=` variant-layering still applies); `ollama`/`open-webui` go through the shared open-webui compose project. For what's running use `docker ps -a`; for what's actually on the GPU use `nvidia-smi`.
+Services are `qwen38`, `litellm`, `open-webui`. `up engine=qwen38` delegates to that stack's own `make up` (pre-flight checks, then waits for `/health`); the others run `docker compose up -d` in their directory. For what's running use `docker ps -a`; for what's actually on the GPU use `nvidia-smi`.
 
-vLLM (`--gpu-memory-utilization 0.9`) and llama-cpp classic single-model mode (`-ngl 999`) claim VRAM eagerly and can't co-reside with another eager engine on the GB10; ollama and llama-cpp router mode are lazy. The Makefile deliberately **doesn't** enforce that trade-off — run `make down engine=<other>` first when you need the whole GPU (a "running" container isn't necessarily on the GPU).
+The Qwen engine claims ~90 GiB of the GB10's unified memory eagerly and can't co-reside with another eager engine. The Makefile deliberately **doesn't** enforce that trade-off — run `make down engine=<other>` first when you add a second engine under `models/` and need the whole GPU (a "running" container isn't necessarily on the GPU).
 
 ## Conventions
 
-- **Image tags float by default, pin in production.** The committed `.env.example` files use floating tags (`latest`, or a stable major-line like `v2` for Traefik, or the multi-arch floating tag `server-cuda` for `ggml-org/llama.cpp`) so a fresh `cp .env.example .env` bootstraps to a working state without anyone having to look up the current release. **For production deployments, override in your host-local `.env` with a specific, reproducible pin** — an immutable tag (`v2.11.X`, `v0.20.2`) when the registry publishes one, or a content-digest pin (`server-cuda@sha256:…`) when only floating tags exist. Each per-service `.env.example` shows the pin format inline.
-- **Inference config split** by scope. `<stack>/.env` carries host-wide values (image pin, HF cache path, HF token, default knobs); `<stack>/envs/<name>.env` carries just the model selection plus per-variant overrides. `make up ENV=<name>` chains both via `docker compose --env-file .env --env-file envs/<name>.env up -d`. Both files are gitignored — the templates live next to them as `.env.example`.
-- **Loopback ports on inference stacks.** `vllm/` and `llama-cpp/` additionally bind their API to `127.0.0.1` on the host for direct curl / benchmarking — LAN traffic still flows through the proxy.
+- **Image tags float by default, pin in production.** The committed `.env.example` files use floating tags (`latest`, or a stable major-line like `v2` for Traefik, or `main-stable` for LiteLLM) so a fresh `cp .env.example .env` bootstraps to a working state without anyone having to look up the current release. **For production deployments, override in your host-local `.env` with a specific, reproducible pin** — an immutable tag (`v2.11.X`, `v0.20.2`) when the registry publishes one, or a content-digest pin (`<tag>@sha256:…`) when only floating tags exist. Each per-service `.env.example` shows the pin format inline.
+- **Model stacks** under `models/<name>/`: `.env` holds host-wide values (cache paths, token, the recipe's own knobs); a vendored upstream recipe lives in an unpatched `upstream/` submodule, and a generated `.generated/` directory (gitignored) carries what the compose file needs from it. See [`models/README.md`](models/README.md).
+- **Loopback ports.** `litellm/` and the model stacks bind their API to `127.0.0.1` on the host for direct curl / benchmarking — LAN traffic flows through the proxy, and model engines have no Traefik router at all (only `litellm` is exposed).
 - **Permissions.** `/opt/<stack>/` is `root:root`. The `.env` files are `root:docker 640` so the `docker`-group user reads them and runs compose without sudo. Editing configs requires `sudo`.
 - **Supply chain.** Every third-party Docker image is referenced by tag in `.env.example` (floating for first-bootstrap convenience; pin in your host-local `.env` for production).
 
 ## Repo housekeeping
 
 - [`CHANGELOG.md`](CHANGELOG.md) — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format, [SemVer](https://semver.org/spec/v2.0.0.html) versioning.
-- [`docs/`](docs/) — design/planning docs for individual features (e.g. `docs/superpowers/specs/`, `docs/superpowers/plans/` for the llama-cpp router-mode work).
+- [`docs/`](docs/) — design/planning docs for individual features (e.g. `docs/superpowers/specs/`, `docs/superpowers/plans/`; the llama-cpp router-mode ones describe a stack that has since been retired).
 - [`LICENSE`](LICENSE) — MIT.
 - [`sparky.svg`](sparky.svg) — project mascot. Drawn by the AI that helped build this repo, as a self-portrait.

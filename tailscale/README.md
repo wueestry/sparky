@@ -81,6 +81,10 @@ Do this in order:
 | 502 from `https://…ts.net` | Traefik isn't up or isn't published on 127.0.0.1:443: `curl -k https://127.0.0.1:443 -H 'Host: traefik.spark-1822.local'`. |
 | Node came back as `spark-1822-1` | The old container node wasn't deleted (step 2 above). |
 
+## Retired services
+
+`services.json` is the whole truth: `make apply` replaces every service's handlers, so a service removed from it stops being served. The VIP services of retired stacks (`svc:vllm`, `svc:llama`, `svc:ollama`, `svc:netdata`) should also be deleted in the admin console. `svc:litellm` replaces them as the entry point for models; create it there (ports `tcp/80` + `tcp/443`) before applying.
+
 ## See also
 
 - Top-level [README](../README.md) and [`traefik/`](../traefik/): the proxy this serves.

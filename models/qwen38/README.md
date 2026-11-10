@@ -68,7 +68,7 @@ If a rootless problem ever *does* need a change inside upstream, prefer making i
 ## Rootless Docker notes
 
 - **Networking.** Host networking isn't used (under rootless it is rootlesskit's namespace, not the host's). LiteLLM reaches the engine as `http://qwen38:8888` over the `traefik` network.
-- **GPU.** The compose file asks for the NVIDIA device the same way `vllm/` and `llama-cpp/` do. If your setup uses CDI instead, replace the `deploy` block with `devices: ["nvidia.com/gpu=all"]` (Docker ≥ 28.3).
+- **GPU.** The compose file uses the standard `deploy.resources.reservations.devices` GPU request (the pattern the retired vLLM and llama.cpp stacks used on this host). If your setup uses CDI instead, replace the `deploy` block with `devices: ["nvidia.com/gpu=all"]` (Docker ≥ 28.3).
 - **`memlock`.** The engine wants `memlock` unlimited. A rootless daemon cannot raise limits above its own: if the container logs a locked-memory error, set `LimitMEMLOCK=infinity` in a systemd drop-in for the user's `docker.service` and restart it.
 - **Permissions.** `HF_CACHE`, `KERNEL_CACHE` and `STATE_DIR` must be writable by the user running `make` (container root maps to that user). `.generated/` holds `engine.env`, which contains `TENSORFOLD_API_KEY` if you set one: it is `chmod 600` and gitignored.
 

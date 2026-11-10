@@ -23,8 +23,8 @@ entryPoints:
     address: ":443"
     # Default respondingTimeouts.idleTimeout is 180s (and readTimeout/
     # writeTimeout default to 0/unbounded, so those are fine as-is).
-    # A long-lived streaming response (LLM token generation via ollama/
-    # llama-cpp/vllm) can go quiet between chunks for longer than that
+    # A long-lived streaming response (LLM token generation through
+    # litellm and the engines behind it) can go quiet between chunks for longer than that
     # and gets cut mid-stream even though the backend is still working —
     # disabled here since every service behind this entrypoint is
     # internal/trusted, not public-facing.
@@ -63,8 +63,8 @@ providers:
     network: traefik    # always dial upstreams over the shared traefik network
     watch: true
 
-  # Secondary: anything that can't be label-driven — host-network
-  # containers (netdata) and traefik's own dashboard route.
+  # Secondary: anything that can't be label-driven — traefik's own dashboard
+  # route.
   file:
     directory: /etc/traefik/dynamic
     watch: true         # hot-reload on dynamic/*.yml changes

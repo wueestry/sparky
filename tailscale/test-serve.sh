@@ -31,7 +31,7 @@ check "node :80 proxies to Traefik on loopback"          'grep -qx "serve --bg -
 check "node :443 proxies with https+insecure"            'grep -qx "serve --bg --yes --https=443 https+insecure://127.0.0.1:443" "$tmp/log"'
 check "services applied with --all from the given file"  'grep -qx "serve set-config --all $here/services.json" "$tmp/log"'
 check "services come last (after the node-level serve)"  '[[ "$(grep -n "set-config --all" "$tmp/log" | cut -d: -f1)" -gt "$(grep -n -- "--https=443" "$tmp/log" | cut -d: -f1)" ]]'
-check "reports how many services were applied"           'grep -q "applied node :80/:443 and 6 services" "$tmp/out"'
+check "reports how many services were applied"           'grep -q "applied node :80/:443 and 3 services" "$tmp/out"'
 
 STUB_STATE=NeedsLogin run apply "$here/services.json"; rc=$?
 check "refuses when not logged in, nothing is applied"   '(( rc != 0 )) && grep -q "not logged in" "$tmp/out" && ! grep -qE "^serve (--bg|set-config --all)" "$tmp/log"'

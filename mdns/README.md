@@ -1,6 +1,6 @@
 # mdns
 
-Host-level systemd template service that publishes subdomain aliases via Avahi mDNS. Lets `netdata.spark-1822.local`, `whatever.spark-1822.local`, etc. resolve on the LAN without DNS or `/etc/hosts` entries on each client.
+Host-level systemd template service that publishes subdomain aliases via Avahi mDNS. Lets `litellm.spark-1822.local`, `whatever.spark-1822.local`, etc. resolve on the LAN without DNS or `/etc/hosts` entries on each client.
 
 Unlike the other stacks in this repo, this is **not** a Docker compose stack — Avahi's API is on the host's DBus and aliases must be published by a process the host's `avahi-daemon` trusts.
 
@@ -47,37 +47,37 @@ $ make
 ## Add an alias
 
 ```bash
-make add ALIAS=netdata
-# expands to: sudo systemctl enable --now 'sparky-mdns-alias@netdata.spark-1822.local'
+make add ALIAS=litellm
+# expands to: sudo systemctl enable --now 'sparky-mdns-alias@litellm.spark-1822.local'
 ```
 
-`HOST` defaults to `$(hostname).local`. To publish under a different domain, pass it explicitly: `make add ALIAS=netdata HOST=other.local`.
+`HOST` defaults to `$(hostname).local`. To publish under a different domain, pass it explicitly: `make add ALIAS=litellm HOST=other.local`.
 
 Verify from this host:
 
 ```bash
-make resolve ALIAS=netdata
-# expands to: avahi-resolve -n netdata.spark-1822.local
+make resolve ALIAS=litellm
+# expands to: avahi-resolve -n litellm.spark-1822.local
 ```
 
 Or from a LAN client:
 
 ```bash
-dig @224.0.0.251 -p 5353 netdata.spark-1822.local   # raw mDNS query
-dscacheutil -q host -a name netdata.spark-1822.local   # macOS
+dig @224.0.0.251 -p 5353 litellm.spark-1822.local   # raw mDNS query
+dscacheutil -q host -a name litellm.spark-1822.local   # macOS
 ```
 
 If the alias misbehaves, tail its journal:
 
 ```bash
-make logs ALIAS=netdata
+make logs ALIAS=litellm
 ```
 
 ## Remove an alias
 
 ```bash
-make remove ALIAS=netdata
-# expands to: sudo systemctl disable --now 'sparky-mdns-alias@netdata.spark-1822.local'
+make remove ALIAS=litellm
+# expands to: sudo systemctl disable --now 'sparky-mdns-alias@litellm.spark-1822.local'
 ```
 
 ## Uninstall everything

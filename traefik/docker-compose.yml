@@ -5,8 +5,6 @@ services:
     image: traefik:${TRAEFIK_TAG:?TRAEFIK_TAG must be set in .env}
     container_name: traefik
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
       - traefik
     ports:
@@ -40,7 +38,7 @@ services:
 
 networks:
   # The shared front-end network. This stack OWNS the network — bringing
-  # traefik up creates it; other stacks (vllm, llama-cpp, open-webui, ...)
+  # traefik up creates it; other stacks (litellm, open-webui, models/*, ...)
   # reference it as `external: true` and join so traefik can reach them
   # by container name.
   traefik:
