@@ -14,7 +14,6 @@ Configuration for the [NVIDIA DGX Spark](https://amzn.to/47ZeWqZ) workstation `s
 - **Tailscale** sidecar for tailnet-only ingress (peer-to-peer over WireGuard; no public DNS, no public ports).
 - **Netdata** for real-time observability.
 - **mDNS** helper publishing `<sub>.spark-1822.local` aliases on the LAN.
-- **Trivy** + **Dependabot** keep the supply chain honest in CI.
 
 ## Topology
 
@@ -41,7 +40,6 @@ TLS comes from two different roots: Traefik mints its own internal CA (clients i
 ├── netdata/       # Real-time observability
 ├── mdns/          # Host-side mDNS aliases helper
 ├── docs/          # Design/planning docs (e.g. llama-cpp router-mode spec)
-├── .github/       # CI: Trivy workflow + Dependabot config
 ├── Makefile       # top-level LLM-engine control (up / down / list)
 ├── sparky.svg     # Project logo (AI self-portrait)
 ├── CHANGELOG.md
@@ -163,13 +161,11 @@ vLLM (`--gpu-memory-utilization 0.9`) and llama-cpp classic single-model mode (`
 - **Inference config split** by scope. `<stack>/.env` carries host-wide values (image pin, HF cache path, HF token, default knobs); `<stack>/envs/<name>.env` carries just the model selection plus per-variant overrides. `make up ENV=<name>` chains both via `docker compose --env-file .env --env-file envs/<name>.env up -d`. Both files are gitignored — the templates live next to them as `.env.example`.
 - **Loopback ports on inference stacks.** `vllm/` and `llama-cpp/` additionally bind their API to `127.0.0.1` on the host for direct curl / benchmarking — LAN traffic still flows through the proxy.
 - **Permissions.** `/opt/<stack>/` is `root:root`. The `.env` files are `root:docker 640` so the `docker`-group user reads them and runs compose without sudo. Editing configs requires `sudo`.
-- **Supply chain.** Every third-party Docker image is referenced by tag in `.env.example` (floating for first-bootstrap convenience; pin in your host-local `.env` for production). Every GitHub Action is pinned by commit SHA. Trivy scans push / PR / weekly cron; Dependabot keeps the SHA pins fresh with a weekly grouped PR.
+- **Supply chain.** Every third-party Docker image is referenced by tag in `.env.example` (floating for first-bootstrap convenience; pin in your host-local `.env` for production).
 
 ## Repo housekeeping
 
 - [`CHANGELOG.md`](CHANGELOG.md) — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format, [SemVer](https://semver.org/spec/v2.0.0.html) versioning.
-- [`.github/workflows/trivy.yml`](.github/workflows/trivy.yml) — image CVE scans (HIGH+CRITICAL, fixed-only), IaC config scan, filesystem secret scan. Doc: [`.github/workflows/trivy.md`](.github/workflows/trivy.md).
-- [`.github/dependabot.yml`](.github/dependabot.yml) — weekly grouped PR to bump pinned GitHub Action SHAs.
 - [`docs/`](docs/) — design/planning docs for individual features (e.g. `docs/superpowers/specs/`, `docs/superpowers/plans/` for the llama-cpp router-mode work).
 - [`README.es.md`](README.es.md), [`README.ru.md`](README.ru.md), [`README.zh.md`](README.zh.md) — Spanish, Russian, and Simplified Chinese translations of this README, kept in sync via the language-switcher line under the logo.
 - [`LICENSE`](LICENSE) — MIT.
