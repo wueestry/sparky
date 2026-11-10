@@ -11,7 +11,7 @@ Configuration for the [NVIDIA DGX Spark](https://amzn.to/47ZeWqZ) workstation `s
 - **LiteLLM** as the OpenAI-compatible gateway in front of the models (keys, routing, spend tracking).
 - **Open WebUI + Ollama** for the chat UI.
 - **Traefik** as the HTTPS reverse proxy in front of everything (docker-label-driven, mints its own internal CA).
-- **Tailscale** sidecar for tailnet-only ingress (peer-to-peer over WireGuard; no public DNS, no public ports).
+- **Tailscale** as a host service (kernel mode) for tailnet-only ingress (peer-to-peer over WireGuard; no public DNS, no public ports).
 - **Netdata** for real-time observability.
 - **mDNS** helper publishing `<sub>.spark-1822.local` aliases on the LAN.
 
@@ -21,10 +21,10 @@ Two ingress paths into the same backends:
 
 ```
 LAN client      ──(mDNS *.spark-1822.local)──>  traefik :80/:443  ──>  backend
-tailnet client  ──(MagicDNS, WireGuard)──>  tailscale :443  ──>  traefik :80  ──>  backend
+tailnet client  ──(MagicDNS, WireGuard)──>  tailscaled :443  ──>  traefik 127.0.0.1:80/443  ──>  backend
 ```
 
-Backends (`vllm`, `llama-cpp`, `litellm`, the stacks under `models/`, `open-webui`, `ollama`) all sit on a single shared Docker network named `traefik` — defined by the `traefik/` stack, joined as `external: true` by everyone else. The active proxy and the Tailscale sidecar each attach to the same network and dial container names directly. `netdata` is the exception: it runs with `network_mode: host` (needed for host-level PID/proc telemetry), so it has no endpoint on the `traefik` network — Traefik reaches it via a static route to `host.docker.internal:19999` in `traefik/dynamic/services.yml` instead of container-name DNS.
+Backends (`vllm`, `llama-cpp`, `litellm`, the stacks under `models/`, `open-webui`, `ollama`) all sit on a single shared Docker network named `traefik` — defined by the `traefik/` stack, joined as `external: true` by everyone else. The proxy attaches to the same network and dials container names directly; Tailscale runs on the host, outside Docker, and reaches Traefik through its published ports. `netdata` is the exception: it runs with `network_mode: host` (needed for host-level PID/proc telemetry), so it has no endpoint on the `traefik` network — Traefik reaches it via a static route to `host.docker.internal:19999` in `traefik/dynamic/services.yml` instead of container-name DNS.
 
 TLS comes from two different roots: Traefik mints its own internal CA (clients install `traefik-root.crt` once); Tailscale auto-provisions publicly-trusted MagicDNS certs for the tailnet hostname.
 
@@ -33,7 +33,7 @@ TLS comes from two different roots: Traefik mints its own internal CA (clients i
 ```
 .
 ├── traefik/       # HTTPS reverse proxy (docker-label-driven)
-├── tailscale/     # Tailscale sidecar — tailnet ingress
+├── tailscale/     # Tailscale host service — declarative Serve config + apply helper
 ├── vllm/          # vLLM inference server (HF safetensors)
 ├── llama-cpp/     # llama.cpp inference server (GGUF)
 ├── models/        # one subfolder per model recipe (qwen38/ …), served behind litellm
@@ -56,7 +56,7 @@ Each stack has its own `README.md` — start there for deploy / configure / upgr
 | Stack | Role | URL on LAN |
 |---|---|---|
 | [`traefik/`](traefik/) | HTTPS reverse proxy, docker-label-driven, mints its own internal CA | publishes `:80`/`:443` |
-| [`tailscale/`](tailscale/) | Tailscale sidecar — tailnet-only ingress over WireGuard, optional Serve overlay fronts `traefik` | `https://spark-1822.<tailnet>.ts.net` |
+| [`tailscale/`](tailscale/) | Tailscale as a host service (`tailscaled`, kernel mode) — tailnet-only ingress over WireGuard; Serve config fronts `traefik`, applied by a small helper | `https://spark-1822.<tailnet>.ts.net` |
 | [`vllm/`](vllm/) | vLLM inference server (HF safetensors), tool-calling (`qwen3_xml` by default, set per variant) | `https://vllm.spark-1822.local` |
 | [`llama-cpp/`](llama-cpp/) | llama.cpp GPU-accelerated inference server (GGUF). Router mode (default) serves every GGUF in the HF cache on demand; classic single-model mode also supported. OpenAI-compatible API + web UI | `https://llama.spark-1822.local` |
 | [`models/qwen38/`](models/qwen38/) | Qwen3.8 Flash Next on TensorFold (MiaAI-Lab recipe as an unpatched submodule, rootless-compatible, ~5 concurrent streams, 262k context). Reached only through LiteLLM | `127.0.0.1:8888` on the host; no router of its own |
@@ -123,15 +123,16 @@ On a fresh host, in order:
    docker volume create litellm-db && docker compose up -d
    ```
 
-5. **(Optional) Tailnet ingress via Tailscale** — only if you want this host reachable from your tailnet:
+5. **(Optional) Tailnet ingress via Tailscale** — only if you want this host reachable from your tailnet. Tailscale runs on the host, not in Docker: install it from [Tailscale's package](https://tailscale.com/kb/1031/install-linux), then:
 
    ```bash
    cd /opt/tailscale
-   cp .env.example .env             # paste TS_AUTHKEY from the Tailscale admin console
-   docker compose up -d
+   make check && make install       # helper + boot-time unit; services.json goes to /etc/sparky-tailscale
+   make up                          # log the host in (open the printed URL)
+   make apply                       # serve the node and the VIP services → Traefik
    ```
 
-   The node registers as `spark-1822.<tailnet>.ts.net` with a real publicly-trusted MagicDNS cert; Tailscale Serve wires `:80`/`:443` on the tailnet to Traefik. For per-backend tailnet URLs (`https://vllm.<tailnet>.ts.net`, `https://traefik.<tailnet>.ts.net`, …), create one [Tailscale VIP Service](https://tailscale.com/kb/1417/services) per backend and declare it in `tailscale/serve.json` (applied and advertised automatically on every container start) — see [`tailscale/README.md`](tailscale/README.md) for the full walk-through.
+   The node registers as `spark-1822.<tailnet>.ts.net` with a real publicly-trusted MagicDNS cert; Tailscale Serve wires `:80`/`:443` on the tailnet to Traefik. For per-backend tailnet URLs (`https://litellm.<tailnet>.ts.net`, `https://traefik.<tailnet>.ts.net`, …), create one [Tailscale VIP Service](https://tailscale.com/kb/1417/services) per backend in the admin console and list it in `tailscale/services.json` — see [`tailscale/README.md`](tailscale/README.md) for the full walk-through.
 
 ## Deploy workflow
 
