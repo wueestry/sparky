@@ -1,0 +1,95 @@
+name: litellm
+
+# LiteLLM proxy: one OpenAI-compatible endpoint in front of every model stack
+# under models/. Clients (Open WebUI, scripts, agents) talk to
+# https://litellm.<host> with a LiteLLM key; the backends stay unexposed.
+# Models are declared in config.yaml.
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:${LITELLM_TAG:?LITELLM_TAG must be set in .env}
+    container_name: litellm
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    networks:
+      - traefik     # Traefik in front, and reach to model backends (qwen38:8888)
+      - internal    # Postgres
+    # Loopback-only, for direct curl on the host.
+    ports:
+      - "127.0.0.1:${HOST_PORT:-4000}:4000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.litellm.rule=HostRegexp(`litellm.{x:.+}`)"
+      - "traefik.http.routers.litellm.entryPoints=websecure"
+      - "traefik.http.routers.litellm.tls=true"
+      - "traefik.http.services.litellm.loadbalancer.server.port=4000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set in .env (openssl rand -hex 24, prefixed sk-)}
+      # Encrypts credentials stored in the database. Set once; changing it
+      # makes previously stored credentials unreadable.
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?LITELLM_SALT_KEY must be set in .env}
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@litellm-db:5432/litellm
+      STORE_MODEL_IN_DB: "False"     # models come from config.yaml (version-controlled)
+      LITELLM_DONT_SHOW_FEEDBACK_BOX: "true"
+      # models/qwen38: the engine's own key, if you set TENSORFOLD_API_KEY there.
+      # Without one the engine ignores the value; it only has to be non-empty.
+      QWEN38_API_KEY: ${QWEN38_API_KEY:-none}
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=4)\""]
+      interval: 30s
+      timeout: 6s
+      retries: 5
+      start_period: 90s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  litellm-db:
+    image: postgres:${POSTGRES_TAG:?POSTGRES_TAG must be set in .env}
+    container_name: litellm-db
+    restart: unless-stopped
+    networks:
+      - internal    # not on the traefik network: only LiteLLM can reach it
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    volumes:
+      - litellm-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  traefik:
+    external: true
+    name: traefik
+  internal:
+    name: litellm-internal
+    internal: true
+
+volumes:
+  # External so `docker compose down -v` can never delete keys, spend history
+  # and the user database. Create once: docker volume create litellm-db
+  litellm-db:
+    external: true
+    name: litellm-db

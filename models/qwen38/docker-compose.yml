@@ -1,0 +1,63 @@
+name: qwen38
+
+# Qwen3.8 Flash Next on TensorFold, from MiaAI-Lab's recipe (upstream/).
+#
+# This file replaces upstream/start.sh's `docker run`. The image, the serve
+# arguments and the engine variables come from `make env`
+# (scripts/resolve.sh reads them from upstream's own dry-run), so this file
+# only decides how the container runs. It is written for rootless Docker:
+# no host networking, no host PID/port probing, no privileged flags.
+services:
+  qwen38:
+    image: ${TF_IMAGE:-tensorfold-qwen38:unresolved}
+    container_name: qwen38
+    # `no`, like vllm/ and llama-cpp/: the model takes ~90 GiB of the GPU's
+    # unified memory, so it must never start by itself beside another engine.
+    restart: "no"
+    networks:
+      - traefik
+    # Loopback-only, for curl / benchmarks (tools/bench.py). LiteLLM reaches
+    # the engine as http://qwen38:8888 over the traefik network.
+    #
+    # There is deliberately NO Traefik router here: the engine has no auth by
+    # default, and litellm/ is the one place that holds API keys. To expose it
+    # directly anyway, add the same labels vllm/docker-compose.yml has.
+    ports:
+      - "127.0.0.1:${TF_HOST_PORT:-8888}:${TF_PORT:-8888}"
+    ipc: host
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      stack: 67108864
+    env_file:
+      - path: .generated/engine.env
+        required: false
+    volumes:
+      - ${TF_HF_CACHE:-/opt/hf/.cache/huggingface}:/root/.cache/huggingface:ro
+      - ${TF_KERNEL_CACHE:-/opt/hf/.cache/tensorfold-qwen38}:/cache
+    command: ${TF_COMMAND:-tensorfold-native --version}
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${TF_PORT:-8888}/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 1800s   # loading ~81 GiB of weights
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  traefik:
+    external: true
+    name: traefik

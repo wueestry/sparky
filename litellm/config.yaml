@@ -1,0 +1,27 @@
+# LiteLLM proxy config. Add a model by adding an entry to model_list: the
+# backends are the stacks under models/, reached by container name over the
+# `traefik` Docker network. Clients choose by `model_name`.
+#
+# After editing: docker compose restart litellm
+model_list:
+  # models/qwen38 — Qwen3.8 Flash Next (TensorFold, one GPU, ~5 concurrent streams)
+  - model_name: qwen3.8-flash-next
+    litellm_params:
+      model: openai/Qwen3.8-Flash-Next        # the engine's served name (--name)
+      api_base: http://qwen38:8888/v1
+      api_key: os.environ/QWEN38_API_KEY
+      timeout: 1800                            # a 130k-token prefill alone takes ~1 min
+      stream_timeout: 1800
+
+router_settings:
+  # One GPU, ~5 slots: retrying a failed long request only queues more work.
+  num_retries: 0
+
+litellm_settings:
+  # Backends take parameters of their own; drop what an OpenAI-style client
+  # sends that they don't know instead of failing the request.
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
