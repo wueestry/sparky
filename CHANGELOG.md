@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   - **Host migration**: `cd /opt/cloudflare && docker compose down` **before** `git pull` (the pull deletes the compose file), then delete the tunnel (and its public hostnames/DNS records) in the Cloudflare Zero Trust dashboard and revoke the token. If `llama-cpp` was exposed through the tunnel with `LLAMA_API_KEY` as the only protection, that exposure ends with the tunnel.
 - `tailscale/services.json` and `make services-apply` / `services-clear`: superseded by the declarative `Services` block in `serve.json`. `make services-status` is replaced by `make status` (live serve config + `AdvertiseServices`).
 - Legacy `svc:spark` is no longer advertised by this node; delete it in the admin console.
+- **Translated READMEs (`README.es.md`, `README.ru.md`, `README.zh.md`).** The README is English-only again; the language switcher under the logo and the translation references in the layout tree and housekeeping list are gone. Keeping four copies in sync multiplied the cost of every README change. They remain in git history.
 
 ### Security
 
