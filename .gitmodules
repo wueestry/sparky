@@ -1,0 +1,3 @@
+[submodule "models/qwen38/upstream"]
+	path = models/qwen38/upstream
+	url = https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold

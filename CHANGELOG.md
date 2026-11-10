@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **`models/` and the `models/qwen38/` stack.** One subfolder per served model. `qwen38` serves Qwen3.8 Flash Next (NVIDIA FP4 QAD checkpoint) with TensorFold's Zig engine, using [MiaAI-Lab's recipe](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold) as a git submodule pinned at `20e15e4` and **not patched**.
+  - Rootless Docker without patching: upstream's `start.sh` is a rootful `docker run` wrapper (host networking, `--gpus all`, `ss` / `nvidia-smi` PID probing). `scripts/resolve.sh` runs its `DRY_RUN=1` mode to read the image, the `tensorfold-native serve` arguments, the `TENSORFOLD_*` / `TF_FLASHNEXT_*` variables and the cache mounts, and `docker-compose.yml` decides how the container runs (`traefik` network, no host networking, loopback-only debug port, GPU reservation, healthcheck). Upstream's `prepare.sh` (image, checkpoint download and verification) runs unchanged.
+  - `make update [REF=…]` bumps the submodule, shows what changed in the files the overlay depends on, and re-resolves; if upstream's dry-run format changes it reverts and says so. `./test-resolve.sh` covers the resolver (stub `docker`, no GPU).
+  - `make up` runs a pre-flight (rootless daemon, `traefik` network, image, checkpoint, offline argument validation like upstream's, free memory, host `hf` CLI) and then waits on `/health`.
+  - The engine has no Traefik router on purpose (no auth by default); only `litellm/` is exposed.
+- **`litellm/` stack**: LiteLLM proxy + Postgres (private network, external `litellm-db` volume). Models are declared in `config.yaml` (`STORE_MODEL_IN_DB=False`); `qwen3.8-flash-next` points at `http://qwen38:8888/v1`. Tested against a stand-in backend: model listing, 401 without a key, and a chat request routed through.
+- Top-level `Makefile`: `make up|down engine=qwen38|litellm`.
+- `.github/dependabot.yml`: a `gitsubmodule` entry so new upstream commits of the Qwen recipe show up as a weekly PR.
+- **Host migration**: after `git pull`, run `git submodule update --init --recursive`, then follow `models/qwen38/README.md` (first `make prepare` downloads ~96 GiB and needs ~90–110 GiB of free GPU memory to run: stop the other engines first) and `litellm/README.md` (three secrets in `.env`, `docker volume create litellm-db`). Nothing existing is changed or removed by this release; Open WebUI and Ollama are untouched and still talk to each other.
+
 ### Changed
 
 - **`vllm/`: new models no longer need code changes.** The two places that hard-coded model knowledge are now data-driven.

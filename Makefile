@@ -10,15 +10,18 @@ SHELL := /usr/bin/env bash
 # /opt on the host (where vllm/, llama-cpp/, open-webui/, … are siblings).
 # Override ROOT if they live elsewhere.
 #
-# GPU note: vLLM (--gpu-memory-utilization 0.9) and llama-cpp classic mode
-# (-ngl 999) claim VRAM eagerly, so they can't share the GB10 with another
-# eager engine. ollama and llama-cpp router mode are lazy. Managing that
-# trade-off is left to you — `make down engine=<other>` first when needed.
+# GPU note: vLLM (--gpu-memory-utilization 0.9), llama-cpp classic mode
+# (-ngl 999) and qwen38 (~90 GiB: weights + KV pool + reserve) claim memory
+# eagerly, so they can't share the GB10 with another eager engine. ollama and
+# llama-cpp router mode are lazy. Managing that trade-off is left to you —
+# `make down engine=<other>` first when needed. litellm uses no GPU.
 ROOT ?= .
 
 # LLM services this Makefile knows about. ollama + open-webui live together
-# in the open-webui compose project (the UI depends_on ollama).
-ENGINES := vllm llama-cpp ollama open-webui
+# in the open-webui compose project (the UI depends_on ollama). qwen38 lives
+# under models/ (one subfolder per model); litellm is the gateway in front of
+# them.
+ENGINES := vllm llama-cpp qwen38 litellm ollama open-webui
 
 .PHONY: help list sync up down
 
@@ -28,6 +31,8 @@ help:  ## Show this help.
 	@echo "Engines: $(ENGINES)"
 	@echo "  make up engine=vllm ENV=<variant>   — start one engine"
 	@echo "  make up engine=llama-cpp            — llama-cpp, empty ENV = router mode"
+	@echo "  make up engine=qwen38               — Qwen3.8 Flash Next (models/qwen38; first: make prepare there)"
+	@echo "  make up engine=litellm              — the LiteLLM gateway"
 	@echo "  make down engine=vllm               — stop just that engine"
 	@echo "  make list                           — model variants for vllm / llama-cpp"
 	@echo "  make sync                           — after hf download / git pull: sync both stacks"
@@ -47,6 +52,10 @@ up:  ## Start one engine. Usage: make up engine=<name> [ENV=<variant>]
 	@case "$(engine)" in \
 	    vllm|llama-cpp) \
 	        $(MAKE) -C "$(ROOT)/$(engine)" up ENV="$(ENV)" ;; \
+	    qwen38) \
+	        $(MAKE) -C "$(ROOT)/models/qwen38" up ;; \
+	    litellm) \
+	        ( cd "$(ROOT)/litellm" && docker compose up -d ) ;; \
 	    ollama) \
 	        ( cd "$(ROOT)/open-webui" && docker compose up -d ollama ) ;; \
 	    open-webui) \
@@ -61,7 +70,7 @@ up:  ## Start one engine. Usage: make up engine=<name> [ENV=<variant>]
 
 down:  ## Stop one engine (leaves the others running). Usage: make down engine=<name>
 	@case "$(engine)" in \
-	    vllm|llama-cpp|ollama|open-webui) \
+	    vllm|llama-cpp|qwen38|litellm|ollama|open-webui) \
 	        if [[ "$$(docker inspect -f '{{.State.Running}}' "$(engine)" 2>/dev/null)" == "true" ]]; then \
 	            echo "→ stopping $(engine)"; docker stop "$(engine)" >/dev/null; \
 	            if [[ "$(engine)" == "ollama" ]]; then \

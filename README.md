@@ -7,6 +7,8 @@
 Configuration for the [NVIDIA DGX Spark](https://amzn.to/47ZeWqZ) workstation `spark-1822` — a single-box, self-hosted LLM setup:
 
 - **vLLM** and **llama.cpp** for inference (HF safetensors and GGUF respectively, both GPU-accelerated on the GB10).
+- **`models/`** — one stack per self-contained model recipe, starting with **Qwen3.8 Flash Next** on [MiaAI-Lab's TensorFold recipe](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold) (vendored as an unpatched git submodule).
+- **LiteLLM** as the OpenAI-compatible gateway in front of the models (keys, routing, spend tracking).
 - **Open WebUI + Ollama** for the chat UI.
 - **Traefik** as the HTTPS reverse proxy in front of everything (docker-label-driven, mints its own internal CA).
 - **Tailscale** sidecar for tailnet-only ingress (peer-to-peer over WireGuard; no public DNS, no public ports).
@@ -22,7 +24,7 @@ LAN client      ──(mDNS *.spark-1822.local)──>  traefik :80/:443  ──
 tailnet client  ──(MagicDNS, WireGuard)──>  tailscale :443  ──>  traefik :80  ──>  backend
 ```
 
-Backends (`vllm`, `llama-cpp`, `open-webui`, `ollama`) all sit on a single shared Docker network named `traefik` — defined by the `traefik/` stack, joined as `external: true` by everyone else. The active proxy and the Tailscale sidecar each attach to the same network and dial container names directly. `netdata` is the exception: it runs with `network_mode: host` (needed for host-level PID/proc telemetry), so it has no endpoint on the `traefik` network — Traefik reaches it via a static route to `host.docker.internal:19999` in `traefik/dynamic/services.yml` instead of container-name DNS.
+Backends (`vllm`, `llama-cpp`, `litellm`, the stacks under `models/`, `open-webui`, `ollama`) all sit on a single shared Docker network named `traefik` — defined by the `traefik/` stack, joined as `external: true` by everyone else. The active proxy and the Tailscale sidecar each attach to the same network and dial container names directly. `netdata` is the exception: it runs with `network_mode: host` (needed for host-level PID/proc telemetry), so it has no endpoint on the `traefik` network — Traefik reaches it via a static route to `host.docker.internal:19999` in `traefik/dynamic/services.yml` instead of container-name DNS.
 
 TLS comes from two different roots: Traefik mints its own internal CA (clients install `traefik-root.crt` once); Tailscale auto-provisions publicly-trusted MagicDNS certs for the tailnet hostname.
 
@@ -34,6 +36,8 @@ TLS comes from two different roots: Traefik mints its own internal CA (clients i
 ├── tailscale/     # Tailscale sidecar — tailnet ingress
 ├── vllm/          # vLLM inference server (HF safetensors)
 ├── llama-cpp/     # llama.cpp inference server (GGUF)
+├── models/        # one subfolder per model recipe (qwen38/ …), served behind litellm
+├── litellm/       # LiteLLM gateway (+ Postgres) in front of models/
 ├── open-webui/    # Open WebUI + Ollama (chat UI)
 ├── netdata/       # Real-time observability
 ├── mdns/          # Host-side mDNS aliases helper
@@ -55,6 +59,8 @@ Each stack has its own `README.md` — start there for deploy / configure / upgr
 | [`tailscale/`](tailscale/) | Tailscale sidecar — tailnet-only ingress over WireGuard, optional Serve overlay fronts `traefik` | `https://spark-1822.<tailnet>.ts.net` |
 | [`vllm/`](vllm/) | vLLM inference server (HF safetensors), tool-calling (`qwen3_xml` by default, set per variant) | `https://vllm.spark-1822.local` |
 | [`llama-cpp/`](llama-cpp/) | llama.cpp GPU-accelerated inference server (GGUF). Router mode (default) serves every GGUF in the HF cache on demand; classic single-model mode also supported. OpenAI-compatible API + web UI | `https://llama.spark-1822.local` |
+| [`models/qwen38/`](models/qwen38/) | Qwen3.8 Flash Next on TensorFold (MiaAI-Lab recipe as an unpatched submodule, rootless-compatible, ~5 concurrent streams, 262k context). Reached only through LiteLLM | `127.0.0.1:8888` on the host; no router of its own |
+| [`litellm/`](litellm/) | LiteLLM OpenAI-compatible gateway + Postgres: one endpoint and key set for every model under `models/` | `https://litellm.spark-1822.local` |
 | [`open-webui/`](open-webui/) | Open WebUI + Ollama (GPU on Ollama only) | `https://open-webui.spark-1822.local`, `https://ollama.spark-1822.local` |
 | [`netdata/`](netdata/) | Real-time host + container telemetry | `https://netdata.spark-1822.local` |
 | [`mdns/`](mdns/) | Host systemd template publishing `<sub>.spark-1822.local` mDNS aliases | host-level |
@@ -96,7 +102,7 @@ On a fresh host, in order:
 
    ```bash
    cd /opt/mdns
-   for a in traefik vllm llama ollama open-webui netdata; do make add ALIAS=$a; done
+   for a in traefik vllm llama litellm ollama open-webui netdata; do make add ALIAS=$a; done
    ```
 
 4. **Bring up the services** — each one attaches to the `traefik` network and Traefik auto-routes via the `traefik.*` labels in its compose:
@@ -106,6 +112,15 @@ On a fresh host, in order:
    cd /opt/netdata    && cp .env.example .env && docker compose up -d
    cd /opt/vllm       && make up ENV=<variant>      # see vllm/envs/
    cd /opt/llama-cpp  && make up ENV=<variant>      # see llama-cpp/envs/
+   ```
+
+   The Qwen recipe is a git submodule and downloads ~96 GiB the first time; the gateway needs secrets in its `.env` (see [`litellm/README.md`](litellm/README.md)):
+
+   ```bash
+   cd /opt && sudo git submodule update --init models/qwen38/upstream
+   cd /opt/models/qwen38 && make prepare && make up      # see models/qwen38/README.md
+   cd /opt/litellm       && cp .env.example .env         # fill the three secrets
+   docker volume create litellm-db && docker compose up -d
    ```
 
 5. **(Optional) Tailnet ingress via Tailscale** — only if you want this host reachable from your tailnet:
@@ -123,7 +138,7 @@ On a fresh host, in order:
 `/opt` on the host **is** a checkout of this repo — every stack lives in place at `/opt/<name>/`. Edit locally, commit, push; then pull on the host:
 
 ```bash
-ssh spark-1822.local 'sudo git -C /opt pull --ff-only'
+ssh spark-1822.local 'sudo git -C /opt pull --ff-only --recurse-submodules'
 ```
 
 After the pull, apply the change in the relevant stack (each stack's README has details):
@@ -136,17 +151,19 @@ Host-local files outside git stay put across pulls — each stack's `.env` (secr
 
 ## Managing the LLM engines
 
-The top-level [`Makefile`](Makefile) (at `/opt/Makefile` on the host) is a thin wrapper over the four LLM services — it acts on **one engine at a time and never touches the others**:
+The top-level [`Makefile`](Makefile) (at `/opt/Makefile` on the host) is a thin wrapper over the LLM services — it acts on **one engine at a time and never touches the others**:
 
 ```bash
 make up engine=vllm ENV=<variant>    # start one engine
 make up engine=llama-cpp             # llama-cpp with empty ENV = router mode
+make up engine=qwen38                # Qwen3.8 Flash Next (models/qwen38; `make prepare` there first)
+make up engine=litellm               # the gateway (no GPU)
 make down engine=ollama              # stop just that one; the rest keep running
 make list                            # model variants for vllm / llama-cpp
 make sync                            # after `hf download` or `git pull`: sync vllm + llama-cpp
 ```
 
-Engines are `vllm`, `llama-cpp`, `ollama`, `open-webui`. `up engine=vllm|llama-cpp` delegates to that stack's own `make up` (so `ENV=` variant-layering still applies); `ollama`/`open-webui` go through the shared open-webui compose project. For what's running use `docker ps -a`; for what's actually on the GPU use `nvidia-smi`.
+Engines are `vllm`, `llama-cpp`, `qwen38`, `litellm`, `ollama`, `open-webui`. `up engine=vllm|llama-cpp|qwen38` delegates to that stack's own `make up` (so `ENV=` variant-layering still applies); `ollama`/`open-webui` go through the shared open-webui compose project. For what's running use `docker ps -a`; for what's actually on the GPU use `nvidia-smi`.
 
 vLLM (`--gpu-memory-utilization 0.9`) and llama-cpp classic single-model mode (`-ngl 999`) claim VRAM eagerly and can't co-reside with another eager engine on the GB10; ollama and llama-cpp router mode are lazy. The Makefile deliberately **doesn't** enforce that trade-off — run `make down engine=<other>` first when you need the whole GPU (a "running" container isn't necessarily on the GPU).
 

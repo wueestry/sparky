@@ -19,3 +19,16 @@ updates:
       github-actions:
         patterns:
           - "*"
+
+  # Upstream recipes vendored under models/. A bump here is a prompt to run
+  # `make update`-style checks (see models/qwen38/README.md), not something to
+  # merge unreviewed: the compose overlay depends on upstream's start.sh format.
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    commit-message:
+      prefix: "chore(models)"
