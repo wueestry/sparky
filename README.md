@@ -4,8 +4,6 @@
   <img src="sparky.svg" alt="sparky" width="220" height="260">
 </p>
 
-<p align="center"><b>English</b> | <a href="README.es.md">Español</a> | <a href="README.ru.md">Русский</a> | <a href="README.zh.md">中文</a></p>
-
 Configuration for the [NVIDIA DGX Spark](https://amzn.to/47ZeWqZ) workstation `spark-1822` — a single-box, self-hosted LLM setup:
 
 - **vLLM** and **llama.cpp** for inference (HF safetensors and GGUF respectively, both GPU-accelerated on the GB10).
@@ -46,10 +44,7 @@ TLS comes from two different roots: Traefik mints its own internal CA (clients i
 ├── sparky.svg     # Project logo (AI self-portrait)
 ├── CHANGELOG.md
 ├── LICENSE
-├── README.md
-├── README.es.md   # Spanish translation
-├── README.ru.md   # Russian translation
-└── README.zh.md   # Simplified Chinese translation
+└── README.md
 ```
 
 Each stack has its own `README.md` — start there for deploy / configure / upgrade details.
@@ -171,6 +166,5 @@ vLLM (`--gpu-memory-utilization 0.9`) and llama-cpp classic single-model mode (`
 - [`.github/workflows/trivy.yml`](.github/workflows/trivy.yml) — image CVE scans (HIGH+CRITICAL, fixed-only), IaC config scan, filesystem secret scan. Doc: [`.github/workflows/trivy.md`](.github/workflows/trivy.md).
 - [`.github/dependabot.yml`](.github/dependabot.yml) — weekly grouped PR to bump pinned GitHub Action SHAs.
 - [`docs/`](docs/) — design/planning docs for individual features (e.g. `docs/superpowers/specs/`, `docs/superpowers/plans/` for the llama-cpp router-mode work).
-- [`README.es.md`](README.es.md), [`README.ru.md`](README.ru.md), [`README.zh.md`](README.zh.md) — Spanish, Russian, and Simplified Chinese translations of this README, kept in sync via the language-switcher line under the logo.
 - [`LICENSE`](LICENSE) — MIT.
 - [`sparky.svg`](sparky.svg) — project mascot. Drawn by the AI that helped build this repo, as a self-portrait.
