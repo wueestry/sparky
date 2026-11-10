@@ -11,7 +11,7 @@ services:
   qwen38:
     image: ${TF_IMAGE:-tensorfold-qwen38:unresolved}
     container_name: qwen38
-    # `no`, like vllm/ and llama-cpp/: the model takes ~90 GiB of the GPU's
+    # `no`: the model takes ~90 GiB of the GPU's
     # unified memory, so it must never start by itself beside another engine.
     restart: "no"
     networks:
@@ -21,7 +21,14 @@ services:
     #
     # There is deliberately NO Traefik router here: the engine has no auth by
     # default, and litellm/ is the one place that holds API keys. To expose it
-    # directly anyway, add the same labels vllm/docker-compose.yml has.
+    # directly anyway, add (the usual pattern in this repo):
+    #   labels:
+    #     - "traefik.enable=true"
+    #     - "traefik.docker.network=traefik"
+    #     - "traefik.http.routers.qwen38.rule=HostRegexp(`qwen38.{x:.+}`)"
+    #     - "traefik.http.routers.qwen38.entryPoints=websecure"
+    #     - "traefik.http.routers.qwen38.tls=true"
+    #     - "traefik.http.services.qwen38.loadbalancer.server.port=8888"
     ports:
       - "127.0.0.1:${TF_HOST_PORT:-8888}:${TF_PORT:-8888}"
     ipc: host

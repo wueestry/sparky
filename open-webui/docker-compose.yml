@@ -1,98 +1,10 @@
 name: open-webui
 
 services:
-  ollama:
-    image: ollama/ollama:${OLLAMA_TAG:?OLLAMA_TAG must be set in .env}
-    container_name: ollama
-    restart: unless-stopped
-    networks:
-      - traefik
-    # Traefik docker-provider labels. Wire ollama:11434 to
-    # https://ollama.<any-spark-host>.<any-domain>.
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=traefik"
-      - "traefik.http.routers.ollama.rule=HostRegexp(`ollama.{x:.+}`)"
-      - "traefik.http.routers.ollama.entryPoints=websecure"
-      - "traefik.http.routers.ollama.tls=true"
-      - "traefik.http.services.ollama.loadbalancer.server.port=11434"
-    volumes:
-      - ollama:/root/.ollama
-    environment:
-      OLLAMA_HOST: 0.0.0.0:11434
-      # 30m, not Ollama's 5m: agent clients pause 5-30 min between turns, and
-      # an unload throws away the cached prompt prefix — the next turn then
-      # re-prefills the whole prompt at ~660 tok/s on GB10 (55k tokens took
-      # 70s; ~100k would take ~2.5 min) plus a ~10s model load.
-      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
-      # DGX Spark (GB10) tuning. The GPU shares 128 GB of unified memory with
-      # the host and every other stack, so the KV cache is the knob that
-      # matters. Unset, Ollama sizes context by "VRAM" and picks 256k here:
-      # ~23 GB of f16 KV for a 31B model before a token is generated.
-      #
-      # Context: 128k covers the agent/API clients' largest prompts (~100k
-      # tokens seen) plus output headroom. OpenAI-compatible clients
-      # (/v1/chat/completions) can't send num_ctx, so this default IS their
-      # context window; below their largest prompt, Ollama silently truncates.
-      #
-      # KV cache: f16. The main agent model (Qwen3.8 27B, hybrid, 16 attention
-      # layers) needs only ~8 GB of KV at 128k, and the Ollama FAQ flags
-      # high-GQA Qwen models as the most hurt by KV quantization. Use q8_0
-      # (half) only if memory gets tight; it needs flash attention, pinned on.
-      OLLAMA_FLASH_ATTENTION: ${OLLAMA_FLASH_ATTENTION:-1}
-      OLLAMA_KV_CACHE_TYPE: ${OLLAMA_KV_CACHE_TYPE:-f16}
-      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-131072}
-      # Memory the scheduler must leave free for everything else on the box
-      # (OS, speaches, vllm/llama-cpp). On GB10 the driver can hang the host
-      # instead of returning a clean CUDA OOM when unified memory runs out,
-      # so Ollama must never plan to fill it. Bytes; default 8 GiB.
-      OLLAMA_GPU_OVERHEAD: ${OLLAMA_GPU_OVERHEAD:-8589934592}
-      # Local-only: no Ollama cloud models or web search (model pulls still work).
-      OLLAMA_NO_CLOUD: ${OLLAMA_NO_CLOUD:-1}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    # Ollama needs no Linux capabilities: it binds an unprivileged port and
-    # writes only to its own volume. GPU access comes from the nvidia
-    # runtime's device injection, not from capabilities.
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    # Immutable root filesystem: models and keys live in the volume; scratch
-    # goes to tmpfs.
-    read_only: true
-    tmpfs:
-      - /tmp
-    # Ollama forks a llama-server runner per loaded model; an init (tini) as
-    # PID 1 reaps them and forwards signals so `docker stop` releases their
-    # unified memory cleanly.
-    init: true
-    # Bounds runaway forks/threads; measured peak is ~130 over a day of use.
-    pids_limit: 2048
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
   open-webui:
     image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_TAG:?OPEN_WEBUI_TAG must be set in .env}
     container_name: open-webui
     restart: unless-stopped
-    depends_on:
-      ollama:
-        condition: service_healthy
     networks:
       - traefik
     # Traefik docker-provider labels. Wire open-webui:8080 to
@@ -107,7 +19,17 @@ services:
     volumes:
       - open-webui:/app/backend/data
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
+      # Models come from the LiteLLM gateway (litellm/), over the shared
+      # `traefik` network. No Ollama.
+      #
+      # NOTE: Open WebUI stores these as "persistent config" — they seed the
+      # database on FIRST start, after which the Admin Panel → Settings →
+      # Connections values win. Changing them here later has no effect unless
+      # you also set ENABLE_PERSISTENT_CONFIG=false or edit them in the UI.
+      ENABLE_OLLAMA_API: "false"
+      ENABLE_OPENAI_API: "true"
+      OPENAI_API_BASE_URL: http://litellm:4000/v1
+      OPENAI_API_KEY: ${LITELLM_API_KEY:?LITELLM_API_KEY must be set in .env (a LiteLLM virtual key, see README)}
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?WEBUI_SECRET_KEY must be set in .env}
       WEBUI_AUTH: ${WEBUI_AUTH:-true}
       ENABLE_SIGNUP: ${ENABLE_SIGNUP:-true}
@@ -129,21 +51,15 @@ services:
         max-file: "3"
 
 networks:
-  # Single network shared with traefik and every other stack —
-  # open-webui resolves `ollama` by name over it.
+  # Single network shared with traefik and every other stack — open-webui
+  # resolves `litellm` by name over it.
   traefik:
     external: true
     name: traefik
 
 volumes:
-  # Both volumes are external — host-side persistent state we don't want
-  # `docker compose down -v` to ever destroy (ollama model blobs ~tens of
-  # GiB; Open WebUI users/chats/config). `open-webui-ollama` is also
-  # consumed read-only by the `llama-cpp/` stack to reuse Ollama's GGUF
-  # blob cache.
-  ollama:
-    external: true
-    name: open-webui-ollama
+  # External — host-side persistent state we don't want `docker compose down -v`
+  # to ever destroy (Open WebUI users/chats/config).
   open-webui:
     external: true
     name: open-webui
