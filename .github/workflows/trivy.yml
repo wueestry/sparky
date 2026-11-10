@@ -27,7 +27,6 @@ jobs:
       llamacpp_tag: ${{ steps.tags.outputs.llamacpp_tag }}
       vllm_tag: ${{ steps.tags.outputs.vllm_tag }}
       traefik_tag: ${{ steps.tags.outputs.traefik_tag }}
-      cloudflared_tag: ${{ steps.tags.outputs.cloudflared_tag }}
       tailscale_tag: ${{ steps.tags.outputs.tailscale_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -55,7 +54,6 @@ jobs:
           llamacpp_tag=$(extract llama-cpp/.env.example LLAMACPP_TAG)
           vllm_tag=$(extract vllm/.env.example VLLM_TAG)
           traefik_tag=$(extract traefik/.env.example TRAEFIK_TAG)
-          cloudflared_tag=$(extract cloudflare/.env.example CLOUDFLARED_TAG)
           tailscale_tag=$(extract tailscale/.env.example TAILSCALE_TAG)
           echo "ollama_tag=${ollama_tag}" >> "$GITHUB_OUTPUT"
           echo "open_webui_tag=${open_webui_tag}" >> "$GITHUB_OUTPUT"
@@ -63,7 +61,6 @@ jobs:
           echo "llamacpp_tag=${llamacpp_tag}" >> "$GITHUB_OUTPUT"
           echo "vllm_tag=${vllm_tag}" >> "$GITHUB_OUTPUT"
           echo "traefik_tag=${traefik_tag}" >> "$GITHUB_OUTPUT"
-          echo "cloudflared_tag=${cloudflared_tag}" >> "$GITHUB_OUTPUT"
           echo "tailscale_tag=${tailscale_tag}" >> "$GITHUB_OUTPUT"
 
   image-scan:
@@ -93,8 +90,6 @@ jobs:
             image: vllm/vllm-openai:${{ needs.extract-tags.outputs.vllm_tag }}
           - name: traefik
             image: traefik:${{ needs.extract-tags.outputs.traefik_tag }}
-          - name: cloudflared
-            image: cloudflare/cloudflared:${{ needs.extract-tags.outputs.cloudflared_tag }}
           - name: tailscale
             image: tailscale/tailscale:${{ needs.extract-tags.outputs.tailscale_tag }}
     steps:

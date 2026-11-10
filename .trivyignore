@@ -26,7 +26,7 @@
 # Discovered:   2026-07-16, CI run 29466589985 — the `image-scan (open-webui)`
 #               CRITICAL gate; all four are Debian 12 (bookworm) base packages.
 # Exposure:     Open WebUI here is a single-user chat UI behind Traefik on the
-#               LAN / Cloudflare tunnel — no MariaDB server process, no Mesa GPU
+#               LAN / tailnet — no MariaDB server process, no Mesa GPU
 #               render path, and linux-libc-dev ships only kernel *headers*, not
 #               a running kernel. None of these vectors are reachable as run.
 # ─────────────────────────────────────────────────────────────────────────────

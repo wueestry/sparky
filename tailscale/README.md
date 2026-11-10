@@ -247,7 +247,6 @@ Recommended baseline: **1 + 3 + 4** as a single hardening pass. **2 (OAuth)** is
 
 - Top-level [README](../README.md)
 - [`traefik/`](../traefik/) — the proxy this sidecar fronts
-- [`cloudflare/`](../cloudflare/) — the other edge-ingress stack in this repo, structurally analogous (also tunnels into traefik over an outbound-only connection)
 - Tailscale Docker guide: <https://tailscale.com/docs/features/containers/docker/how-to/connect-docker-container>
 - Tailscale Serve docs: <https://tailscale.com/kb/1242/tailscale-serve>
 - Tailscale OAuth clients: <https://tailscale.com/kb/1215/oauth-clients>

@@ -1,6 +1,6 @@
 # llama-cpp
 
-[llama.cpp](https://github.com/ggml-org/llama.cpp) inference server, GPU-accelerated on the GB10 via CUDA. Serves an [OpenAI-compatible API](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) and a small web UI at `https://llama.spark-1822.local` (fronted by [`traefik/`](../traefik/); the router matches any `llama.<domain>`, so the same backend also answers on `llama.<tailnet>.ts.net` if the matching VIP service is set up — see [`tailscale/README.md`](../tailscale/README.md) — and on any Cloudflare Tunnel public hostname).
+[llama.cpp](https://github.com/ggml-org/llama.cpp) inference server, GPU-accelerated on the GB10 via CUDA. Serves an [OpenAI-compatible API](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) and a small web UI at `https://llama.spark-1822.local` (fronted by [`traefik/`](../traefik/); the router matches any `llama.<domain>`, so the same backend also answers on `llama.<tailnet>.ts.net` if the matching VIP service is set up — see [`tailscale/README.md`](../tailscale/README.md)).
 
 Set up as the workaround for Ollama not being able to pull `gpt-oss-safeguard:120b` (upstream issue: ollama/ollama#16121).
 
@@ -87,7 +87,7 @@ Each GGUF is reachable under **three IDs** that all point at the same file: the 
 echo "LLAMA_API_KEY=$(openssl rand -hex 32)" >> .env
 ```
 
-Clients (OpenWebUI's `LITELLM_BASE_URL_API_KEY` or equivalent, curl scripts) must send `Authorization: Bearer $LLAMA_API_KEY`. If `LLAMA_API_KEY` is blank, the endpoint is open — useful for one-off local testing but **not** safe with the Cloudflare Tunnel path active.
+Clients (OpenWebUI's `LITELLM_BASE_URL_API_KEY` or equivalent, curl scripts) must send `Authorization: Bearer $LLAMA_API_KEY`. If `LLAMA_API_KEY` is blank, the endpoint is open — useful for one-off local testing but **not** safe on a shared network.
 
 ### VRAM budget
 

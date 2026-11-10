@@ -11,7 +11,6 @@
 - **vLLM** и **llama.cpp** для инференса (safetensors от HF и GGUF соответственно, оба с ускорением на GPU GB10).
 - **Open WebUI + Ollama** для интерфейса чата.
 - **Traefik** в качестве HTTPS-реверс-прокси перед всем остальным (управляется метками Docker, выпускает собственный внутренний CA).
-- **Cloudflare Tunnel** для публичного входящего трафика только через исходящее соединение (никаких открытых портов на хосте).
 - **Tailscale**-сайдкар для входа только через tailnet (peer-to-peer поверх WireGuard; без публичного DNS, без публичных портов).
 - **Netdata** для наблюдаемости в реальном времени.
 - Помощник **mDNS**, публикующий алиасы `<sub>.spark-1822.local` в локальной сети.
@@ -19,24 +18,22 @@
 
 ## Топология
 
-Три пути входящего трафика к одним и тем же бэкендам:
+Два пути входящего трафика к одним и тем же бэкендам:
 
 ```
 клиент LAN      ──(mDNS *.spark-1822.local)──>  traefik :80/:443  ──>  бэкенд
-публичный клиент ──(DNS, edge Cloudflare)──>  cloudflared ──>  traefik :80  ──>  бэкенд
 клиент tailnet  ──(MagicDNS, WireGuard)──>  tailscale :443  ──>  traefik :80  ──>  бэкенд
 ```
 
-Бэкенды (`vllm`, `llama-cpp`, `open-webui`, `ollama`) находятся в единой общей Docker-сети `traefik` — определённой стеком `traefik/`, к которой все остальные подключаются как `external: true`. Активный прокси и оба коннектора туннеля/сайдкара подключаются к той же сети и обращаются к контейнерам напрямую по имени. `netdata` — исключение: он работает с `network_mode: host` (необходимо для телеметрии на уровне PID/proc хоста), поэтому у него нет endpoint'а в сети `traefik` — Traefik обращается к нему через статический маршрут на `host.docker.internal:19999` в `traefik/dynamic/services.yml`, а не через DNS по имени контейнера.
+Бэкенды (`vllm`, `llama-cpp`, `open-webui`, `ollama`) находятся в единой общей Docker-сети `traefik` — определённой стеком `traefik/`, к которой все остальные подключаются как `external: true`. Активный прокси и сайдкар Tailscale подключаются к той же сети и обращаются к контейнерам напрямую по имени. `netdata` — исключение: он работает с `network_mode: host` (необходимо для телеметрии на уровне PID/proc хоста), поэтому у него нет endpoint'а в сети `traefik` — Traefik обращается к нему через статический маршрут на `host.docker.internal:19999` в `traefik/dynamic/services.yml`, а не через DNS по имени контейнера.
 
-TLS происходит из трёх разных корней: Traefik выпускает собственный внутренний CA (клиенты один раз устанавливают `traefik-root.crt`); Cloudflare предоставляет публично доверенные сертификаты на своём edge для хостнеймов туннеля; Tailscale автоматически выпускает публично доверенные сертификаты MagicDNS для хостнейма tailnet.
+TLS происходит из двух разных корней: Traefik выпускает собственный внутренний CA (клиенты один раз устанавливают `traefik-root.crt`); Tailscale автоматически выпускает публично доверенные сертификаты MagicDNS для хостнейма tailnet.
 
 ## Структура
 
 ```
 .
 ├── traefik/       # HTTPS реверс-прокси (управляется метками Docker)
-├── cloudflare/    # Коннектор Cloudflare Tunnel — публичный вход
 ├── tailscale/     # Сайдкар Tailscale — вход через tailnet
 ├── vllm/          # Сервер инференса vLLM (safetensors от HF)
 ├── llama-cpp/     # Сервер инференса llama.cpp (GGUF)
@@ -62,7 +59,6 @@ TLS происходит из трёх разных корней: Traefik вып
 | Стек | Роль | URL в локальной сети |
 |---|---|---|
 | [`traefik/`](traefik/) | HTTPS реверс-прокси, управляется метками Docker, выпускает собственный внутренний CA | публикует `:80`/`:443` |
-| [`cloudflare/`](cloudflare/) | Коннектор Cloudflare Tunnel — публичный вход только через исходящее соединение | настраивается по хостнейму в панели CF |
 | [`tailscale/`](tailscale/) | Сайдкар Tailscale — вход только через tailnet поверх WireGuard, опциональный оверлей Serve перед `traefik` | `https://spark-1822.<tailnet>.ts.net` |
 | [`vllm/`](vllm/) | Сервер инференса vLLM (safetensors от HF), с поддержкой вызова инструментов (`qwen3_xml` по умолчанию, настраивается для каждого варианта) | `https://vllm.spark-1822.local` |
 | [`llama-cpp/`](llama-cpp/) | Сервер инференса llama.cpp с ускорением GPU (GGUF). Режим router (по умолчанию) отдаёт по запросу любой GGUF из кэша HF; также поддерживается классический режим с одной моделью. API, совместимый с OpenAI, + веб-интерфейс | `https://llama.spark-1822.local` |
@@ -119,17 +115,7 @@ TLS происходит из трёх разных корней: Traefik вып
    cd /opt/llama-cpp  && make up ENV=<вариант>      # см. llama-cpp/envs/
    ```
 
-5. **(Опционально) Публичный вход через Cloudflare Tunnel** — только если нужны URL, доступные из интернета:
-
-   ```bash
-   cd /opt/cloudflare
-   cp .env.example .env             # вставьте CLOUDFLARE_TUNNEL_TOKEN из панели CF
-   docker compose up -d
-   ```
-
-   Затем настройте Public Hostnames в панели Cloudflare так, чтобы они перенаправляли на `http://traefik:80` с соответствующим внутренним заголовком Host (рецепт в [`cloudflare/README.md`](cloudflare/README.md)).
-
-6. **(Опционально) Вход через tailnet с Tailscale** — только если нужно, чтобы этот хост был доступен из вашей tailnet:
+5. **(Опционально) Вход через tailnet с Tailscale** — только если нужно, чтобы этот хост был доступен из вашей tailnet:
 
    ```bash
    cd /opt/tailscale
