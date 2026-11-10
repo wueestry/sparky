@@ -1,0 +1,15 @@
+[Unit]
+Description=Apply Tailscale Serve config (node + VIP services → Traefik)
+After=tailscaled.service network-online.target
+Wants=tailscaled.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/sparky-tailscale-serve apply
+TimeoutStartSec=180
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

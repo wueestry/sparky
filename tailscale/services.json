@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "services": {
+    "svc:traefik": {
+      "endpoints": {
+        "tcp:80": "http://127.0.0.1:80",
+        "tcp:443": "https+insecure://127.0.0.1:443"
+      }
+    },
+    "svc:litellm": {
+      "endpoints": {
+        "tcp:80": "http://127.0.0.1:80",
+        "tcp:443": "https+insecure://127.0.0.1:443"
+      }
+    },
+    "svc:open-webui": {
+      "endpoints": {
+        "tcp:80": "http://127.0.0.1:80",
+        "tcp:443": "https+insecure://127.0.0.1:443"
+      }
+    }
+  }
+}

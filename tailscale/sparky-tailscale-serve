@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Apply this host's Tailscale Serve configuration. Runs as root (it talks to
+# tailscaled's socket); meant to be started by sparky-tailscale-serve.service
+# after tailscaled, and by `make apply`.
+#
+#   sparky-tailscale-serve apply [services.json]   # default: /etc/sparky-tailscale/services.json
+#   sparky-tailscale-serve status
+#
+# What it sets, all of it pointing at Traefik's published ports on this host
+# (Traefik does the Host-header routing, as before):
+#   - the node itself:  :80  → http://127.0.0.1:80
+#                       :443 → https+insecure://127.0.0.1:443   (Traefik's own cert is not
+#                              publicly trusted: tailscaled terminates TLS with the real one)
+#   - every VIP service in services.json (tailscale serve set-config --all),
+#     which also advertises them. Each must already exist in the admin console.
+# Idempotent: safe to run on every boot.
+set -euo pipefail
+
+TS=${TAILSCALE:-tailscale}
+WAIT=${WAIT_SECONDS:-120}
+SERVICES_FILE_DEFAULT=/etc/sparky-tailscale/services.json
+
+die() { echo "sparky-tailscale-serve: $*" >&2; exit 1; }
+
+backend_state() {
+  "$TS" status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("BackendState",""))' 2>/dev/null || true
+}
+
+wait_running() {
+  local i state=""
+  for (( i = 0; i < WAIT; i += 2 )); do
+    state=$(backend_state)
+    [[ "$state" == Running ]] && return 0
+    sleep 2
+  done
+  die "tailscale is not logged in and running after ${WAIT}s (state: ${state:-unreachable}); run 'make up' in /opt/tailscale"
+}
+
+case "${1:-}" in
+  apply)
+    file=${2:-$SERVICES_FILE_DEFAULT}
+    [[ -r "$file" ]] || die "cannot read $file"
+    "$TS" serve set-config --help >/dev/null 2>&1 ||
+      die "this tailscale has no 'serve set-config': upgrade it (the declarative services format needs a recent client)"
+    wait_running
+    "$TS" serve --bg --yes --http=80   http://127.0.0.1:80
+    "$TS" serve --bg --yes --https=443 https+insecure://127.0.0.1:443
+    "$TS" serve set-config --all "$file"
+    echo "sparky-tailscale-serve: applied node :80/:443 and $(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["services"]))' "$file") services from $file"
+    ;;
+  status)
+    "$TS" serve status
+    echo
+    echo "Advertised services:"
+    "$TS" debug prefs 2>/dev/null | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin).get("AdvertiseServices") or ["(none)"]))'
+    ;;
+  *)
+    echo "usage: sparky-tailscale-serve apply [services.json] | status" >&2
+    exit 64
+    ;;
+esac

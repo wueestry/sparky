@@ -1,254 +1,91 @@
 # tailscale
 
-[Tailscale](https://tailscale.com/) sidecar that registers this host as a node on your tailnet and runs [Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve) to terminate TLS on tailnet `:443` and reverse-proxy all traffic to `http://traefik:80`. Every backend Traefik already routes becomes reachable over the tailnet without opening any host port.
+Tailscale as a **host service**: `tailscaled` (installed from Tailscale's package, kernel mode, running as root) joins this machine to your tailnet, and [Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve) terminates TLS on the tailnet side and forwards everything to [Traefik](../traefik/), which routes by Host header exactly as it does for LAN clients. This directory holds the declarative part: which services the node serves, and a small helper that applies them at boot.
 
-Based on Tailscale's [Connect a Docker container](https://tailscale.com/docs/features/containers/docker/how-to/connect-docker-container) guide, adapted to this repo's conventions (pinned image tag in `.env`, named state volume, traefik network).
+It used to be a container (a userspace-networking sidecar). It runs on the host now so the node has a real `tailscale0` interface and `tailscaled` is a separate, root-owned systemd service the host firewall can tell apart from every rootless container. See [Migrating from the container](#migrating-from-the-container).
 
 ## Files
 
 ```
 tailscale/
-├── docker-compose.yml          # tailscale sidecar, joined to the traefik network, Serve config mounted
-├── serve.json                  # Tailscale Serve config — node :80/:443 + every VIP service → traefik
-├── Makefile                    # `make status` — live serve config + advertised services
-├── .env.example                # committed; copy to .env and fill in
-└── .env                        # not committed (gitignored)
+├── services.json                   # the VIP services this node serves (declarative, Tailscale's services format)
+├── sparky-tailscale-serve          # applies the node + services config; idempotent
+├── sparky-tailscale-serve.service  # systemd oneshot: re-applies at boot, after tailscaled
+├── Makefile                        # check / install / up / apply / status / logs
+├── test-serve.sh                   # tests for the apply script (stub tailscale, no network)
+└── README.md
 ```
-
-## Configure
-
-### 1. Mint an auth key
-
-Tailscale admin console → **Settings → Keys → Generate auth key**. Recommended:
-
-- **Reusable** — yes (re-creating the container doesn't burn the key)
-- **Ephemeral** — no (node state persists across restarts)
-- **Pre-approved** — yes (skip manual approval)
-- **Tags** — e.g. `tag:server` (matches your ACL policy)
-
-### 2. Drop secrets into `.env`
-
-```bash
-cp .env.example .env
-# Edit .env:
-#   TAILSCALE_TAG  — pin the image (see hub.docker.com/r/tailscale/tailscale/tags)
-#   TS_AUTHKEY     — the key from step 1
-#   TS_HOSTNAME    — tailnet hostname (default: spark-1822)
-```
-
-## Deploy
-
-Prereq: the shared `traefik` Docker network exists. (Bring `traefik/` up at least once, or `docker network create traefik --attachable`.)
-
-```bash
-docker compose up -d
-docker compose logs -f tailscale    # confirm "Success." and the node URL
-```
-
-The node appears in the admin console under **Machines**. MagicDNS publishes it at `https://<TS_HOSTNAME>.<tailnet>.ts.net` — any tailnet-connected device can reach it. TLS uses Tailscale's auto-provisioned MagicDNS cert; no client-side root install needed.
 
 ## How it works
 
 ```
-tailnet client  ──(http  on :80 )──>  tailscale  ──(http  )──>  http://traefik:80
-                                                                       │
-                                                                       │ web entrypoint
-                                                                       │ 308 → https
-                                                                       ▼
-tailnet client  ──(https on :443)──>  tailscale  ──(https+insecure)──> https://traefik:443
-                                                                       │
-                                                                       │ Host header routing
-                                                                       ▼
-                                                                   backend (litellm / open-webui / ...)
+tailnet client ──(http  :80 )──> tailscaled ──> http://127.0.0.1:80              ┐
+tailnet client ──(https :443)──> tailscaled ──> https+insecure://127.0.0.1:443   ┤ Traefik's published ports
+                                                                                  ┘ → Host-header routing → backend
 ```
 
-- The Tailscale daemon runs in userspace mode (no `/dev/net/tun`, no privileged caps) and registers as one node on your tailnet using `TS_AUTHKEY`.
-- [Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve) is configured via the mounted `serve.json`. The container substitutes `${TS_CERT_DOMAIN}` with the node's MagicDNS hostname at startup, then exposes two listeners:
-  - **`:80` plain HTTP**, proxied to `http://traefik:80`. Traefik's `web` entrypoint then 308-redirects to HTTPS. The redirect's `Location` header preserves the tailnet `Host`, so the client follows back to the `:443` listener below — one extra hop on first request, then HTTPS the rest of the way.
-  - **`:443` HTTPS**, with TLS terminated using the publicly-trusted MagicDNS cert, proxied to `https+insecure://traefik:443`. The `+insecure` modifier (plus, not hyphen — tailscaled doesn't recognise `https-insecure://` and returns 502) skips Traefik's wildcard-cert verification (the inner connection is over the trusted `traefik` Docker network, container-to-container — no external attacker reachable). Traefik's `websecure` entrypoint terminates the inner TLS with its own wildcard and routes by Host header.
-- Why not just proxy `:443` to `http://traefik:80`? Because Traefik would see plain HTTP on its `web` entrypoint and 308-redirect — sending the client back through Tailscale `:443` → http://traefik:80 → 308 again → infinite loop. `https+insecure://traefik:443` lands directly on `websecure` and avoids the redirect entirely.
-- State (node key, machine identity) lives in a named docker volume `tailscale-state`, not under `/opt` — so the host's git working tree stays free of secrets.
+- `tailscaled` serves two things, both pointing at Traefik's ports published on this host:
+  - **The node itself** (`https://spark-1822.<tailnet>.ts.net`): `:80` → `http://127.0.0.1:80` and `:443` → `https+insecure://127.0.0.1:443`. Set with `tailscale serve --bg`.
+  - **Every VIP service** in [`services.json`](services.json) (`svc:litellm` → `https://litellm.<tailnet>.ts.net`, …), each with the same two endpoints. Applied with `tailscale serve set-config --all`, which also advertises them.
+- **Why `https+insecure` on `:443`.** Traefik's certificate is signed by its own CA, which tailscaled doesn't trust, so verification is skipped on that loopback hop (the client-facing certificate is Tailscale's public MagicDNS one). It is `+insecure` with a plus; `https-insecure://` is not recognised.
+- **Why not proxy `:443` to `http://127.0.0.1:80`.** Traefik would 308-redirect to HTTPS, the client would come back through Tailscale `:443`, and the loop never ends.
+- `set-config` is services-only: it never touches the node-level `:80`/`:443`, and `--all` replaces every service's handlers, so `services.json` is the full truth for services. `tailscale serve reset` clears everything; re-run `make apply` after one.
+- `services.json` contains **no tailnet name**: the client takes the MagicDNS suffix from the daemon. (The old container-era `serve.json` had it hard-coded.)
+- Traefik must be up for the targets to answer; the node and services still register without it.
 
-### Host-header routing — applied
+## Install
 
-Each Traefik router uses a single `HostRegexp` matcher pinned to its per-service subdomain — `<svc>.{x:.+}` — which accepts the LAN form (`litellm.spark-1822.local`), the per-service tailnet form once you set up per-backend VIP services below (`vllm.<tailnet>.ts.net`), and any other `<svc>.<domain>` that gets pointed at Traefik.
+1. **Install Tailscale** from Tailscale's own package repository: <https://tailscale.com/kb/1031/install-linux>. It must be recent enough to have `tailscale serve set-config` (the declarative services format); `make check` verifies that.
+2. **Check, install the helper, log in, apply:**
 
-```yaml
-# example, open-webui/docker-compose.yml
-- "traefik.http.routers.open-webui.rule=HostRegexp(`open-webui.{x:.+}`)"
-```
+   ```bash
+   cd /opt/tailscale
+   make check      # tailscale installed, recent enough, tailscaled running
+   make install    # script + boot-time unit + services.json under /etc/sparky-tailscale
+   make up         # `tailscale up --hostname=spark-1822 --accept-dns=false` — open the printed URL to log in
+   make apply      # serve the node and the services now (the unit does this on every boot)
+   make status
+   ```
 
-Three routers, one per exposed service — `litellm` and `open-webui` (label-based in each app's compose), plus `traefik` (file-based in `traefik/dynamic/services.yml`). The model engines under `models/` have no router: they are reached only through `litellm`.
+   `TS_HOSTNAME=…` changes the node name; `UP_ARGS='--advertise-tags=tag:server'` adds `tailscale up` flags. Prefer the interactive login over `--auth-key=…`, which lands in shell history and the process list. `--accept-dns=false` keeps tailscaled from rewriting the host's DNS (the resolver Docker's containers inherit); drop it if you want MagicDNS names to resolve on this machine.
+3. **Create each VIP service** in the admin console, <https://login.tailscale.com/admin/services>, with required ports `tcp/80` and `tcp/443`. Tailscale can't create services from the node. The names are the keys of `services.json` (`svc:traefik`, `svc:litellm`, …); if your policy doesn't auto-approve hosts, approve this node as a host for each. Nothing else is manual: `make apply` advertises them.
 
-### Per-backend VIP Services
+Add or remove a service by editing `services.json`, then `make apply`. Port 80/443 on this machine need Traefik published there, which it is; under rootless Docker that already requires `net.ipv4.ip_unprivileged_port_start` ≤ 80.
 
-A Tailscale [VIP Service](https://tailscale.com/kb/1417/services) is a separate tailnet entity from the node — it has its own MagicDNS name (e.g. `litellm.<tailnet>.ts.net`) and its own cert. One service per backend gives tailnet clients a per-service URL without running multiple Tailscale nodes (Tailscale doesn't support wildcard subdomains under a node's MagicDNS name, so this is the canonical multi-name pattern).
-
-Three services map to the three Traefik backends:
-
-| Service     | DNS                              | Lands on              |
-|-------------|----------------------------------|-----------------------|
-| `svc:traefik`     | `traefik.<tailnet>.ts.net`       | Traefik dashboard     |
-| `svc:litellm`     | `litellm.<tailnet>.ts.net`       | LiteLLM gateway       |
-| `svc:open-webui`  | `open-webui.<tailnet>.ts.net`    | Open WebUI            |
-
-All three are declared in the `Services` block of [`serve.json`](serve.json), next to the node's own `:80`/`:443` config. They're indistinguishable on the wire — each proxies to the same `traefik` container, which routes by Host header:
-
-```json
-"Services": {
-  "svc:litellm": {
-    "TCP": { "80": { "HTTP": true }, "443": { "HTTPS": true } },
-    "Web": {
-      "litellm.cuscus-macaroni.ts.net:80":  { "Handlers": { "/": { "Proxy": "http://traefik:80" } } },
-      "litellm.cuscus-macaroni.ts.net:443": { "Handlers": { "/": { "Proxy": "https+insecure://traefik:443" } } }
-    }
-  },
-  ...
-}
-```
-
-The `Web` keys are the service's full MagicDNS name. containerboot only substitutes `${TS_CERT_DOMAIN}` (the *node's* name), so the tailnet suffix `cuscus-macaroni.ts.net` is written out literally — change it there if the tailnet is renamed.
-
-**Setup is one manual step.** In the admin console, create each service at <https://login.tailscale.com/admin/services> with required ports `tcp/80` + `tcp/443` — Tailscale can't create services from the node. Everything else is declarative: on every start, containerboot applies `serve.json` and advertises each service it declares (`TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT`, on by default). To add or remove a service, edit `serve.json` and `docker compose up -d` — containerboot also watches the file and re-applies changes.
+## Operations
 
 ```bash
-cd /opt/tailscale
-make status     # live serve config + AdvertiseServices from the daemon's prefs
+make status                          # served config + advertised services
+make logs                            # the boot-time apply unit
+sudo systemctl status tailscaled
+sudo apt-get install --only-upgrade tailscale   # upgrades come from the package, not an image tag
 ```
 
-Once all three advertise, Traefik routing accepts both `<svc>.spark-1822.local` (LAN) and `<svc>.<tailnet>.ts.net` (tailnet) on every router — the rules were relaxed from `<svc>.spark{x:.+}` to `<svc>.{x:.+}` to match either form.
+Tailscale keeps its serve config in its state, so the node keeps serving across restarts; the unit re-applies `services.json` at boot anyway, so the repo stays the source of truth.
 
-### Troubleshooting: admin console shows "needs configuration"
+## Migrating from the container
 
-The node isn't advertising the service. Check `make status`: the service should appear under `Services` in the serve config and in `AdvertiseServices`.
+Do this in order:
 
-Historically this happened after every container recreate: services were pushed imperatively (`tailscale serve set-config` + `advertise`), but containerboot *replaces* the whole serve config with `serve.json` at startup and re-runs `tailscale up`, which wiped both. Declaring services in `serve.json` is what makes them survive — never configure them with `tailscale serve` by hand, since the next restart discards it.
+1. **Before `git pull`** (it deletes the compose file): `cd /opt/tailscale && docker compose down`. The `tailscale-state` volume is left in place; `docker volume rm tailscale-state` once you're done.
+2. **Delete the old node** in the admin console (Machines → `spark-1822` → Delete). Otherwise the new node registers as `spark-1822-1` and every URL changes. The VIP services themselves stay; only the node that hosts them changes.
+3. `git pull`, then install and log in as above.
 
-### Legacy `svc:spark`
+## Troubleshooting
 
-The first VIP service set up here was `svc:spark` — one service proxying everything to Traefik. The per-backend setup above supersedes it, and it is no longer declared in `serve.json`, so this node doesn't advertise it. Delete it in the admin console; hit `traefik.<tailnet>.ts.net` for the dashboard instead.
+| Symptom | Likely cause |
+|---|---|
+| Admin console shows a service as "needs configuration" | The node isn't advertising it: `make status`; then `make apply`. After a `tailscale serve reset` always re-apply. |
+| `make apply`: `not logged in` | `make up` first. |
+| `make apply`/`check`: no `set-config` | The installed tailscale is too old: upgrade the package. |
+| 502 from `https://…ts.net` | Traefik isn't up or isn't published on 127.0.0.1:443: `curl -k https://127.0.0.1:443 -H 'Host: traefik.spark-1822.local'`. |
+| Node came back as `spark-1822-1` | The old container node wasn't deleted (step 2 above). |
 
-### Retired services: `svc:vllm`, `svc:llama`, `svc:ollama`
+## Retired services
 
-The vLLM, llama.cpp and Ollama stacks were retired in favour of `models/` behind LiteLLM, so these three are no longer declared in `serve.json` or advertised. Create `svc:litellm` in the admin console (ports `tcp/80` + `tcp/443`) **before** deploying this change, then delete the three old services there. Until `svc:litellm` exists the node will advertise a service the tailnet does not know about.
-
-## Logs
-
-```bash
-docker compose logs -f tailscale
-```
-
-The "Success." line confirms the node is logged in. `tailscale status` inside the container shows peers:
-
-```bash
-docker exec tailscale tailscale status
-```
-
-## Upgrade
-
-Bump `TAILSCALE_TAG` in `.env`, then:
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-## Uninstall
-
-```bash
-docker compose down
-docker volume rm tailscale-state    # also discard the node key + machine state
-```
-
-Then delete the node from the Tailscale admin console under **Machines** if you're not reusing it.
-
-## Hardening / industry-standard follow-ups
-
-What's shipped is the minimum that works. Four deferred items move this from "homelab-grade" to what Tailscale's own production guides recommend. Each is independently applicable.
-
-### 1. Auth secret via file mount (not env var)
-
-Today `TS_AUTHKEY` is read from `.env` and exposed in the container's environment — visible to anyone who can `docker inspect` the container. Tailscale's `containerboot` supports a file indirection that keeps the secret off the process env: set `TS_AUTHKEY=file:/run/secrets/ts_authkey` (or `TS_AUTHKEY_FILE=/run/secrets/ts_authkey`) and mount the file via a compose `secrets:` block.
-
-Migration sketch (base `docker-compose.yml`):
-
-```yaml
-services:
-  tailscale:
-    environment:
-      - TS_AUTHKEY=file:/run/secrets/ts_authkey   # was: TS_AUTHKEY=${TS_AUTHKEY:?…}
-    secrets:
-      - ts_authkey
-
-secrets:
-  ts_authkey:
-    file: ./ts_authkey                            # host-local file, mode 0600, gitignored
-```
-
-Tradeoff: one extra file on disk to manage (and rotate). Same threat model as `.env` in practice on this single-host setup, but it's the conventional pattern.
-
-### 2. OAuth client credentials instead of a static auth key
-
-Auth keys are accepted but discouraged for persistent nodes — they expire (90-day max), and rotation is manual toil. The recommended pattern for long-running infrastructure is OAuth client credentials: mint an OAuth client in the admin console (**Settings → OAuth clients**), give it the `devices:write` scope and the `tag:server` tag, and use the resulting `tskey-client-...` token. `containerboot` exchanges it for an ephemeral auth key on every restart — no rotation needed.
-
-```bash
-# .env
-TS_AUTHKEY=tskey-client-<your-oauth-client-secret>?preauthorized=true&ephemeral=false
-```
-
-Tradeoff: one-time setup cost in the dashboard. Bigger lift than (1) — this is a real provisioning decision, not just a refactor.
-
-### 3. Advertise an ACL tag
-
-Without `--advertise-tags`, this node inherits the *minting user's* identity in the Tailscale ACL graph. That works, but it means ACL rules can't distinguish "Dmitry's laptop" from "the inference server" — every device under the same user is treated the same.
-
-Idiomatic fix:
-
-```bash
-# .env
-TS_EXTRA_ARGS=--advertise-tags=tag:server
-```
-
-And in the tailnet ACL JSON:
-
-```json
-{
-  "tagOwners": {
-    "tag:server": ["autogroup:admin"]
-  }
-}
-```
-
-Required if you later want rules like *"only `tag:client` may reach `tag:server:443`"*. OAuth clients (option 2) typically mint pre-tagged keys, so this combines naturally with (2).
-
-### 4. Kernel networking mode
-
-The base file runs in userspace mode (`TS_USERSPACE=true`). Works without elevated privileges, but every packet goes through a userspace TCP stack — meaningful throughput penalty on a busy node. For an inference host fronting LLM endpoints, kernel mode is the production setting.
-
-```yaml
-# docker-compose.yml diff
-services:
-  tailscale:
-    environment:
-      - TS_USERSPACE=false      # was: true
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - net_admin
-      - net_raw
-```
-
-Tradeoff: requires `/dev/net/tun` on the host (true on stock Ubuntu) and the two capabilities. Required to use this node as a subnet router or exit node, which userspace mode can't do either way.
-
-### Priority
-
-Recommended baseline: **1 + 3 + 4** as a single hardening pass. **2 (OAuth)** is the biggest improvement but it's a provisioning decision, not a config refactor — promote it whenever the next auth key would otherwise need renewing.
+`services.json` is the whole truth: `make apply` replaces every service's handlers, so a service removed from it stops being served. The VIP services of retired stacks (`svc:vllm`, `svc:llama`, `svc:ollama`, `svc:netdata`) should also be deleted in the admin console. `svc:litellm` replaces them as the entry point for models; create it there (ports `tcp/80` + `tcp/443`) before applying.
 
 ## See also
 
-- Top-level [README](../README.md)
-- [`traefik/`](../traefik/) — the proxy this sidecar fronts
-- Tailscale Docker guide: <https://tailscale.com/docs/features/containers/docker/how-to/connect-docker-container>
-- Tailscale Serve docs: <https://tailscale.com/kb/1242/tailscale-serve>
-- Tailscale OAuth clients: <https://tailscale.com/kb/1215/oauth-clients>
-- Tailscale ACL tags: <https://tailscale.com/kb/1068/acl-tags>
+- Top-level [README](../README.md) and [`traefik/`](../traefik/): the proxy this serves.
+- Tailscale Serve: <https://tailscale.com/kb/1242/tailscale-serve>; services file format: <https://tailscale.com/kb/1589/tailscale-services-configuration-file>; VIP services: <https://tailscale.com/kb/1417/services>.
