@@ -1,6 +1,6 @@
 [Unit]
 Description=sparky host firewall (nftables)
-Documentation=https://github.com/wueestry/sparky/blob/main/docs/superpowers/specs/2026-11-10-host-firewall-design.md
+Documentation=https://github.com/wueestry/sparky/blob/main/docs/firewall.md
 DefaultDependencies=no
 Before=network-pre.target
 Wants=network-pre.target

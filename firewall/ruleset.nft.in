@@ -1,5 +1,5 @@
 # sparky host firewall: default-deny in both directions. Rendered by render.sh;
-# design and rationale: docs/superpowers/specs/2026-11-10-host-firewall-design.md
+# design and rationale: docs/firewall.md
 # sparky-fw mode: @MODE@
 
 define LAN = @LAN_CIDR@
