@@ -4,7 +4,7 @@
   <img src="sparky.svg" alt="sparky" width="220" height="260">
 </p>
 
-Configuration for the [NVIDIA DGX Spark](https://amzn.to/47ZeWqZ) workstation `spark-1822` — a single-box, self-hosted LLM setup:
+Configuration for the NVIDIA DGX Spark workstation `spark-1822` — a single-box, self-hosted LLM setup:
 
 - **`models/`** — one stack per self-contained model recipe, GPU-accelerated on the GB10, starting with **Qwen3.8 Flash Next** on [MiaAI-Lab's TensorFold recipe](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold) (vendored as an unpatched git submodule, rootless-compatible).
 - **LiteLLM** as the OpenAI-compatible gateway in front of the models (keys, routing, spend tracking).
@@ -167,3 +167,6 @@ The Qwen engine claims ~90 GiB of the GB10's unified memory eagerly and can't co
 - [`docs/`](docs/) — design/planning docs for individual features (e.g. `docs/superpowers/specs/`, `docs/superpowers/plans/`; the llama-cpp router-mode ones describe a stack that has since been retired).
 - [`LICENSE`](LICENSE) — MIT.
 - [`sparky.svg`](sparky.svg) — project mascot. Drawn by the AI that helped build this repo, as a self-portrait.
+
+## Contributions
+- This work is heavily based on [sparky](https://github.com/a1exus/sparky) by a1exus
