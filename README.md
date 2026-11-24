@@ -78,13 +78,13 @@ On a fresh host, in order:
 1. **Install the mDNS helper** (host-side; publishes `<sub>.spark-1822.local` aliases):
 
    ```bash
-   cd /opt/mdns && make install
+   cd <repo>/mdns && make install
    ```
 
 2. **Bring up the reverse proxy** — this also creates the shared `traefik` Docker network everything else joins:
 
    ```bash
-   cd /opt/traefik
+   cd <repo>/traefik
    cp .env.example .env             # then set TRAEFIK_TAG
    make ca-cert                     # one-time: mint Traefik's internal root CA
    make wildcard-cert               # mint the wildcard leaf signed by that root
@@ -96,7 +96,7 @@ On a fresh host, in order:
 3. **Publish a mDNS alias for each subdomain** you'll expose:
 
    ```bash
-   cd /opt/mdns
+   cd <repo>/mdns
    for a in traefik litellm open-webui; do make add ALIAS=$a; done
    ```
 
@@ -105,19 +105,19 @@ On a fresh host, in order:
    The Qwen recipe is a git submodule and downloads ~96 GiB the first time; the gateway needs secrets in its `.env` (see [`litellm/README.md`](litellm/README.md)); Open WebUI then needs a key *from* the gateway (see [`open-webui/README.md`](open-webui/README.md)):
 
    ```bash
-   cd /opt && sudo git submodule update --init models/qwen38/upstream
-   cd /opt/models/qwen38 && make prepare && make up      # see models/qwen38/README.md
-   cd /opt/litellm       && cp .env.example .env         # fill the three secrets
+   cd <repo> && sudo git submodule update --init models/qwen38/upstream
+   cd <repo>/models/qwen38 && make prepare && make up      # see models/qwen38/README.md
+   cd <repo>/litellm       && cp .env.example .env         # fill the three secrets
    docker volume create litellm-db && docker compose up -d
    # create a key for Open WebUI (litellm/README.md), then:
-   cd /opt/open-webui    && cp .env.example .env         # secret + LITELLM_API_KEY
+   cd <repo>/open-webui    && cp .env.example .env         # secret + LITELLM_API_KEY
    docker volume create open-webui && docker compose up -d
    ```
 
 5. **(Optional) Tailnet ingress via Tailscale** — only if you want this host reachable from your tailnet. Tailscale runs on the host, not in Docker: install it from [Tailscale's package](https://tailscale.com/kb/1031/install-linux), then:
 
    ```bash
-   cd /opt/tailscale
+   cd <repo>/tailscale
    make check && make install       # helper + boot-time unit; services.json goes to /etc/sparky-tailscale
    make up                          # log the host in (open the printed URL)
    make apply                       # serve the node and the VIP services → Traefik
@@ -128,7 +128,7 @@ On a fresh host, in order:
 6. **(Recommended) Lock the host down with the firewall** — after Tailscale (it depends on it) and from a LAN SSH session with a second one open:
 
    ```bash
-   cd /opt/firewall
+   cd <repo>/firewall
    cp .env.example .env             # check LAN_CIDR
    make check && make install && make apply   # `make apply MODE=audit` first: logs, blocks nothing; reverts in 2 min…
    make confirm                     # …unless you run this from a SECOND ssh session
@@ -139,32 +139,32 @@ On a fresh host, in order:
 
 ## Deploy workflow
 
-`/opt` on the host **is** a checkout of this repo — every stack lives in place at `/opt/<name>/`. Edit locally, commit, push; then pull on the host:
+The host runs straight from a checkout of this repo — every stack lives in place at `<repo>/<name>/`. Nothing requires a particular location (compose files use relative paths and `make install` copies host helpers to `/usr/local/bin` and `/etc`); on `spark-1822` the checkout is `/opt`, and the commands in these docs write `<repo>` for wherever yours is. Edit locally, commit, push; then pull on the host:
 
 ```bash
-ssh spark-1822.local 'sudo git -C /opt pull --ff-only --recurse-submodules'
+ssh spark-1822.local 'sudo git -C <repo> pull --ff-only --recurse-submodules'
 ```
 
 With the firewall installed, the host can't reach GitHub until you turn the firewall off for the pull (it re-enables itself, and always on reboot):
 
 ```bash
-ssh spark-1822.local 'make -C /opt/firewall disable MINUTES=10 \
-  && sudo git -C /opt pull --ff-only --recurse-submodules; make -C /opt/firewall enable'
+ssh spark-1822.local 'make -C <repo>/firewall disable MINUTES=10 \
+  && sudo git -C <repo> pull --ff-only --recurse-submodules; make -C <repo>/firewall enable'
 ```
 
-Anything else that downloads (`docker compose pull`, `make prepare`, `apt upgrade`) follows the same pattern: `make -C /opt/firewall disable`, do it, `make -C /opt/firewall enable`.
+Anything else that downloads (`docker compose pull`, `make prepare`, `apt upgrade`) follows the same pattern: `make -C <repo>/firewall disable`, do it, `make -C <repo>/firewall enable`.
 
 After the pull, apply the change in the relevant stack (each stack's README has details):
 
-- **Model stacks** (`models/<name>/`) — `cd /opt/models/<name> && make up`; to pick up a new upstream recipe commit, `make update` there first (see the stack's README).
+- **Model stacks** (`models/<name>/`) — `cd <repo>/models/<name> && make up`; to pick up a new upstream recipe commit, `make update` there first (see the stack's README).
 - **Traefik** — routing changes via Docker labels or `dynamic/*.yml` files are hot-reloaded; `docker compose restart traefik` only if `traefik.yml` itself changed.
-- **Other stacks** — `cd /opt/<name> && docker compose up -d`.
+- **Other stacks** — `cd <repo>/<name> && docker compose up -d`.
 
 Host-local files outside git stay put across pulls — each stack's `.env` (secrets), generated `.generated/` directories, TLS material (`*.crt`/`*.key`), and `*.bak` backups are all gitignored.
 
 ## Managing the services
 
-The top-level [`Makefile`](Makefile) (at `/opt/Makefile` on the host) is a thin wrapper over the LLM services — it acts on **one service at a time and never touches the others**:
+The top-level [`Makefile`](Makefile) (run it from `<repo>`) is a thin wrapper over the LLM services — it acts on **one service at a time and never touches the others**:
 
 ```bash
 make up engine=qwen38                # Qwen3.8 Flash Next (models/qwen38; `make prepare` there first)
@@ -182,7 +182,7 @@ The Qwen engine claims ~90 GiB of the GB10's unified memory eagerly and can't co
 - **Image tags float by default, pin in production.** The committed `.env.example` files use floating tags (`latest`, or a stable major-line like `v2` for Traefik, or `main-stable` for LiteLLM) so a fresh `cp .env.example .env` bootstraps to a working state without anyone having to look up the current release. **For production deployments, override in your host-local `.env` with a specific, reproducible pin** — an immutable tag (`v2.11.X`, `v0.20.2`) when the registry publishes one, or a content-digest pin (`<tag>@sha256:…`) when only floating tags exist. Each per-service `.env.example` shows the pin format inline.
 - **Model stacks** under `models/<name>/`: `.env` holds host-wide values (cache paths, token, the recipe's own knobs); a vendored upstream recipe lives in an unpatched `upstream/` submodule, and a generated `.generated/` directory (gitignored) carries what the compose file needs from it. See [`models/README.md`](models/README.md).
 - **Loopback ports.** `litellm/` and the model stacks bind their API to `127.0.0.1` on the host for direct curl / benchmarking — LAN traffic flows through the proxy, and model engines have no Traefik router at all (only `litellm` is exposed).
-- **Permissions.** `/opt/<stack>/` is `root:root`. The `.env` files are `root:docker 640` so the `docker`-group user reads them and runs compose without sudo. Editing configs requires `sudo`.
+- **Permissions.** On `spark-1822`, `/opt/<stack>/` is `root:root`; if you run from a home-directory checkout instead, the Docker user just needs to read it. The `.env` files are `root:docker 640` so the `docker`-group user reads them and runs compose without sudo. Editing configs requires `sudo`.
 - **Supply chain.** Every third-party Docker image is referenced by tag in `.env.example` (floating for first-bootstrap convenience; pin in your host-local `.env` for production).
 
 ## Repo housekeeping

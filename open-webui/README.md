@@ -97,7 +97,7 @@ docker volume rm open-webui   # destroys users, chats and settings
 
 The previous version of this stack ran an `ollama` container beside Open WebUI. After pulling this change on the host:
 
-1. `docker compose up -d --remove-orphans` in `/opt/open-webui` stops and removes the old `ollama` container (the compose file no longer defines it).
+1. `docker compose up -d --remove-orphans` in `<repo>/open-webui` stops and removes the old `ollama` container (the compose file no longer defines it).
 2. The `open-webui-ollama` volume (every model you pulled, often tens of GiB) is **left in place**. Delete it once you are sure you do not need those models: `docker volume rm open-webui-ollama`.
 3. Existing chats and users are kept (same `open-webui` volume). Open WebUI's saved connection settings still point at Ollama: in Admin Panel → Settings → Connections, turn Ollama off and add/verify the OpenAI connection to `http://litellm:4000/v1` (the environment values above only apply to a fresh database).
 
