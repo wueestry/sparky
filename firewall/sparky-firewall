@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+# Host firewall control. Runs as root; installed to /usr/local/bin so the transient
+# systemd timers it arms (revert, re-enable) never depend on the repo checkout.
+# Design: docs/superpowers/specs/2026-11-10-host-firewall-design.md
+#
+#   sparky-firewall check FILE            validate a rendered ruleset and the host around it
+#   sparky-firewall apply FILE            install + load FILE, then auto-revert unless confirmed
+#   sparky-firewall confirm               keep it: cancel the revert, load at boot
+#   sparky-firewall revert                go back to the previous ruleset (or none) now
+#   sparky-firewall disable [MINUTES]     turn the firewall OFF (default 30, max 240); it re-enables itself
+#   sparky-firewall enable                turn it back ON now
+#   sparky-firewall open [MINUTES]        egress-only window (default 15, max 120); inbound stays filtered
+#   sparky-firewall close                 end the egress window
+#   sparky-firewall status                ENFORCING | AUDIT | DISABLED, window, timers, counters
+#   sparky-firewall logs [N]              recent blocked / would-be-blocked traffic
+#   sparky-firewall audit-report [SINCE]  audit-mode log summarised by user / destination
+set -euo pipefail
+
+NFT=${NFT:-nft}
+SYSTEMD_RUN=${SYSTEMD_RUN:-systemd-run}
+SYSTEMCTL=${SYSTEMCTL:-systemctl}
+JOURNALCTL=${JOURNALCTL:-journalctl}
+TAILSCALE=${TAILSCALE:-tailscale}
+CONF_DIR=${CONF_DIR:-/etc/sparky-firewall}
+STATE_DIR=${STATE_DIR:-/run/sparky-firewall}       # tmpfs: gone after a reboot, like the timers
+LIB_DIR=${LIB_DIR:-/var/lib/sparky-firewall}
+SELF=${SELF:-/usr/local/bin/sparky-firewall}
+RULESET=$CONF_DIR/ruleset.nft
+PREV=$CONF_DIR/ruleset.nft.prev
+REVERT_SECONDS=${REVERT_SECONDS:-120}
+DEFAULT_DISABLE=30; MAX_DISABLE=240
+DEFAULT_OPEN=15;    MAX_OPEN=120
+
+die()  { echo "sparky-firewall: $*" >&2; exit 1; }
+note() { echo "sparky-firewall: $*" >&2; command -v logger >/dev/null 2>&1 && logger -t sparky-fw "$*" || true; }
+need_root() { [[ $EUID -eq 0 ]] || die "run as root (sudo)"; }
+table_loaded() { "$NFT" list table inet sparky_fw >/dev/null 2>&1; }
+mode_of() { sed -n 's/^# sparky-fw mode: //p' "$1" 2>/dev/null | head -1; }
+now() { date +%s; }
+
+minutes_arg() {   # minutes_arg VALUE DEFAULT MAX
+  local v=${1:-$2}
+  [[ "$v" =~ ^[0-9]+$ ]] && (( v >= 1 )) || die "MINUTES must be a whole number of minutes, not '$v'"
+  (( v <= $3 )) || die "MINUTES is capped at $3 (got $v)"
+  echo "$v"
+}
+
+cancel_timer() {  # cancel_timer UNIT
+  "$SYSTEMCTL" stop "$1.timer" "$1.service" >/dev/null 2>&1 || true
+  rm -f "$STATE_DIR/$1"
+}
+arm_timer() {     # arm_timer UNIT SECONDS COMMAND...
+  local unit=$1 secs=$2; shift 2
+  cancel_timer "$unit"
+  mkdir -p "$STATE_DIR"
+  "$SYSTEMD_RUN" --quiet --on-active="${secs}s" --unit="$unit" "$SELF" "$@"
+  echo $(( $(now) + secs )) > "$STATE_DIR/$unit"
+}
+remaining() {     # remaining UNIT -> "12m" / "45s" / ""
+  local f="$STATE_DIR/$1" left
+  [[ -f $f ]] || return 0
+  left=$(( $(cat "$f") - $(now) )); (( left > 0 )) || return 0
+  if (( left >= 90 )); then echo "$(( (left + 30) / 60 ))m"; else echo "${left}s"; fi
+}
+
+tailscale_netfilter() {   # off | on : best effort, only when tailscale is installed and up
+  command -v "$TAILSCALE" >/dev/null 2>&1 || return 0
+  "$TAILSCALE" set --netfilter-mode="$1" >/dev/null 2>&1 &&
+    note "tailscale netfilter-mode set to $1" ||
+    note "warning: could not set tailscale --netfilter-mode=$1 (is tailscaled running?)"
+}
+
+cmd_check() {
+  local f=${1:?usage: sparky-firewall check FILE} rc=0
+  command -v "$NFT" >/dev/null 2>&1 || die "nft is not installed (apt install nftables)"
+  echo "check: $("$NFT" --version)"
+  "$NFT" -c -f "$f" || die "$f does not pass 'nft -c': not installing it"
+  echo "check: ruleset parses (mode: $(mode_of "$f"))"
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+    echo "check: WARNING ufw is active and will fight this ruleset: ufw disable" >&2; rc=1
+  fi
+  if "$SYSTEMCTL" is-enabled nftables.service >/dev/null 2>&1; then
+    echo "check: warning: nftables.service is enabled; if its /etc/nftables.conf starts with 'flush ruleset' it will wipe this table on reload" >&2
+  fi
+  command -v "$TAILSCALE" >/dev/null 2>&1 ||
+    echo "check: warning: no host tailscale found. A container-based Tailscale would be blocked by this firewall (see tailscale/README.md)" >&2
+  ip -4 route show default 2>/dev/null | head -1 | sed 's/^/check: default route: /' || true
+  return $rc
+}
+
+cmd_apply() {
+  need_root
+  local f=${1:?usage: sparky-firewall apply FILE} mode
+  [[ -r $f ]] || die "cannot read $f"
+  mode=$(mode_of "$f")
+  if [[ $mode == enforce && ! -f $LIB_DIR/audit-reviewed && ${FORCE:-0} != 1 ]]; then
+    die "refusing to enforce: no audit period has been reviewed. Run in MODE=audit first, then 'audit-report'. (FORCE=1 overrides.)"
+  fi
+  "$NFT" -c -f "$f" || die "$f does not pass 'nft -c'"
+  mkdir -p "$CONF_DIR"
+  # A second apply before confirming must not make the unconfirmed ruleset the revert target.
+  if [[ ! -f $STATE_DIR/sparky-fw-revert ]]; then
+    if [[ -f $RULESET ]]; then cp -p "$RULESET" "$PREV"; else rm -f "$PREV"; fi
+  fi
+  tailscale_netfilter off
+  install -m 600 "$f" "$RULESET"
+  "$NFT" -f "$RULESET"
+  arm_timer sparky-fw-revert "$REVERT_SECONDS" revert
+  note "applied ($mode). It REVERTS in ${REVERT_SECONDS}s unless you confirm: open a SECOND ssh session, check you can still get in, then run 'make confirm'."
+}
+
+cmd_confirm() {
+  need_root
+  [[ -f $RULESET ]] || die "nothing applied yet"
+  cancel_timer sparky-fw-revert
+  "$SYSTEMCTL" enable sparky-firewall.service >/dev/null 2>&1 ||
+    note "warning: could not enable sparky-firewall.service: it will not load at boot (run 'make install' first)"
+  note "confirmed: $(mode_of "$RULESET") ruleset kept and enabled at boot"
+}
+
+cmd_revert() {
+  need_root
+  cancel_timer sparky-fw-revert
+  if [[ -f $PREV ]]; then
+    "$NFT" -f "$PREV"; cp -p "$PREV" "$RULESET"; rm -f "$PREV"
+    note "reverted to the previous ruleset ($(mode_of "$RULESET"))"
+  else
+    table_loaded && "$NFT" delete table inet sparky_fw
+    rm -f "$RULESET"
+    tailscale_netfilter on
+    note "reverted: no previous ruleset, the firewall is OFF"
+  fi
+}
+
+cmd_disable() {
+  need_root
+  local m; m=$(minutes_arg "${1:-}" "$DEFAULT_DISABLE" "$MAX_DISABLE")
+  [[ -f $RULESET ]] || die "no ruleset is installed: nothing to disable (and nothing to re-enable)"
+  table_loaded && "$NFT" delete table inet sparky_fw
+  arm_timer sparky-fw-reenable $(( m * 60 )) enable
+  note "DISABLED: all filtering is off (inbound too). It re-enables itself in ${m}m, or run 'make enable'. A reboot also restores it."
+}
+
+cmd_enable() {
+  need_root
+  [[ -f $RULESET ]] || die "no ruleset is installed: run 'make apply' first"
+  cancel_timer sparky-fw-reenable
+  "$NFT" -f "$RULESET"
+  note "ENABLED: $(mode_of "$RULESET") ruleset loaded"
+}
+
+cmd_open() {
+  need_root
+  local m; m=$(minutes_arg "${1:-}" "$DEFAULT_OPEN" "$MAX_OPEN")
+  table_loaded || die "the firewall is not loaded: nothing is blocked, nothing to open"
+  "$NFT" delete element inet sparky_fw maint_dst '{ 0.0.0.0/0 }' >/dev/null 2>&1 || true   # renew a running window
+  "$NFT" add element inet sparky_fw maint_dst "{ 0.0.0.0/0 timeout ${m}m }"
+  note "egress window OPEN for ${m}m (inbound filtering unchanged); closes by itself"
+}
+
+cmd_close() {
+  need_root
+  table_loaded || die "the firewall is not loaded"
+  if "$NFT" delete element inet sparky_fw maint_dst '{ 0.0.0.0/0 }' >/dev/null 2>&1; then note "egress window closed"
+  else echo "sparky-firewall: no egress window is open"; fi
+}
+
+cmd_status() {
+  local mode left win
+  if table_loaded; then
+    mode=$(mode_of "$RULESET"); mode=${mode:-unknown}
+    if [[ $mode == enforce ]]; then echo "STATE: ENFORCING"; else echo "STATE: ${mode^^} (logs would-be blocks, allows them)"; fi
+  elif [[ -f $RULESET ]]; then
+    left=$(remaining sparky-fw-reenable)
+    echo "STATE: DISABLED — all filtering is off${left:+; re-enables in $left}"
+  else
+    echo "STATE: NOT APPLIED — no ruleset installed"
+  fi
+  if table_loaded; then
+    win=$("$NFT" list set inet sparky_fw maint_dst 2>/dev/null | grep -o 'expires [0-9hms]*' | head -1 || true)
+    [[ -n $win ]] && echo "egress window: OPEN ($win)" || echo "egress window: closed"
+  fi
+  left=$(remaining sparky-fw-revert); [[ -n $left ]] && echo "revert timer: ARMED, reverts in $left unless confirmed (make confirm)"
+  if table_loaded; then echo; "$NFT" list table inet sparky_fw; fi
+}
+
+cmd_logs() { "$JOURNALCTL" -k --no-pager -n "${1:-100}" -o cat 2>/dev/null | grep 'sparky-fw' || echo "no sparky-fw log lines"; }
+
+cmd_audit_report() {
+  local since=${1:-"1 day ago"} lines
+  if [[ -n ${AUDIT_LOG_FILE:-} ]]; then lines=$(cat "$AUDIT_LOG_FILE")
+  else lines=$("$JOURNALCTL" -k --since "$since" --no-pager -o cat 2>/dev/null || true); fi
+  lines=$(grep 'sparky-fw AUDIT out:' <<<"$lines" || true)
+  if [[ -z $lines ]]; then echo "audit-report: no would-be-blocked outbound traffic since $since"; return 0; fi
+  echo "Outbound traffic the enforcing firewall would have rejected (since $since):"
+  printf '%7s  %-16s %-5s %s\n' COUNT USER PROTO DESTINATION
+  awk '{
+      uid="?"; proto="?"; dst="?"; dpt=""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^UID=/)   uid   = substr($i, 5)
+        if ($i ~ /^PROTO=/) proto = substr($i, 7)
+        if ($i ~ /^DST=/)   dst   = substr($i, 5)
+        if ($i ~ /^DPT=/)   dpt   = substr($i, 5)
+      }
+      print uid "\t" proto "\t" dst (dpt != "" ? ":" dpt : "")
+    }' <<<"$lines" | sort | uniq -c | sort -rn | while read -r count uid proto dest; do
+      name=$(getent passwd "$uid" 2>/dev/null | cut -d: -f1 || true)
+      printf '%7s  %-16s %-5s %s\n' "$count" "${name:-uid $uid}" "$proto" "$dest"
+    done
+  mkdir -p "$LIB_DIR" 2>/dev/null && date -Is > "$LIB_DIR/audit-reviewed" 2>/dev/null || true
+  echo
+  echo "Reviewed: enforcing is now allowed ('make apply MODE=enforce'). Anything above you need on purpose is a case for 'make disable' windows, not an exception."
+}
+
+case "${1:-help}" in
+  check)        shift; cmd_check "$@" ;;
+  apply)        shift; cmd_apply "$@" ;;
+  confirm)      cmd_confirm ;;
+  revert)       cmd_revert ;;
+  disable)      shift; cmd_disable "$@" ;;
+  enable)       cmd_enable ;;
+  open)         shift; cmd_open "$@" ;;
+  close)        cmd_close ;;
+  status)       cmd_status ;;
+  logs)         shift; cmd_logs "$@" ;;
+  audit-report) shift; cmd_audit_report "$@" ;;
+  help|-h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) echo "sparky-firewall: unknown command '$1' (try: help)" >&2; exit 64 ;;
+esac

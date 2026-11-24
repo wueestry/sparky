@@ -36,6 +36,11 @@ services:
       DO_NOT_TRACK: "true"
       SCARF_NO_ANALYTICS: "true"
       ANONYMIZED_TELEMETRY: "false"
+      # No "new version available" lookups. The host firewall (firewall/) blocks them
+      # anyway; this just stops the failed attempts. (`OFFLINE_MODE=true` goes further
+      # and also stops Hugging Face model downloads, which breaks RAG embeddings that
+      # are not cached yet, so it is left off.)
+      ENABLE_VERSION_UPDATE_CHECK: "false"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
       interval: 30s

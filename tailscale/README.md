@@ -81,6 +81,10 @@ Do this in order:
 | 502 from `https://…ts.net` | Traefik isn't up or isn't published on 127.0.0.1:443: `curl -k https://127.0.0.1:443 -H 'Host: traefik.spark-1822.local'`. |
 | Node came back as `spark-1822-1` | The old container node wasn't deleted (step 2 above). |
 
+## Firewall
+
+With the host firewall ([`firewall/`](../firewall/)) the node is reachable only from the LAN and the tailnet. The firewall allows `tailscaled` out by its socket mark (`0x80000`, which `tailscaled` sets on its own connections), so the control plane, relays and peers need no IP allow-list, and it accepts everything arriving on `tailscale0` (your tailnet ACLs are the access control). `make apply` in `firewall/` sets `tailscale set --netfilter-mode=off`, because Tailscale's own firewall chains and that ruleset would otherwise both have to accept the same packets; `make revert` / `make uninstall` set it back to `on`. If Tailscale seems broken after enabling the firewall, `make status` there first (is it `DISABLED`?), then `make logs`.
+
 ## Retired services
 
 `services.json` is the whole truth: `make apply` replaces every service's handlers, so a service removed from it stops being served. The VIP services of retired stacks (`svc:vllm`, `svc:llama`, `svc:ollama`, `svc:netdata`) should also be deleted in the admin console. `svc:litellm` replaces them as the entry point for models; create it there (ports `tcp/80` + `tcp/443`) before applying.

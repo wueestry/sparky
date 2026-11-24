@@ -1,0 +1,54 @@
+# sparky host firewall: default-deny in both directions. Rendered by render.sh;
+# design and rationale: docs/superpowers/specs/2026-11-10-host-firewall-design.md
+# sparky-fw mode: @MODE@
+
+define LAN = @LAN_CIDR@
+
+# One atomic transaction: (re)create and replace the table. This file never
+# flushes the whole ruleset, so it cannot disturb any other table.
+table inet sparky_fw
+delete table inet sparky_fw
+
+table inet sparky_fw {
+    # Egress window (`make open`): while this holds 0.0.0.0/0 the host may open
+    # IPv4 connections anywhere. The element carries its own timeout, so the
+    # window closes by itself even if nothing is left running to close it.
+    set maint_dst {
+        type ipv4_addr
+        flags interval, timeout
+    }
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+        ct state invalid drop
+        ct state established,related accept
+        iifname "lo" accept
+        iifname "tailscale0" accept                               # tailnet ACLs are the access control
+        ip saddr 100.64.0.0/10 counter drop                       # tailnet source on any other interface: spoofed
+        ip saddr $LAN tcp dport { 22, 80, 443 } accept            # ssh, Traefik
+        ip saddr $LAN udp dport 5353 accept                       # mDNS
+        ip saddr $LAN icmp type echo-request limit rate 10/second accept
+        ip saddr $LAN ip protocol igmp accept
+        udp sport 67 udp dport 68 accept                          # DHCP replies
+@FINAL_IN@
+    }
+
+    chain output {
+        type filter hook output priority filter; policy drop;
+        ct state invalid drop
+        ct state established,related accept
+        oifname "lo" accept
+        oifname "tailscale0" accept
+        meta mark & 0xff0000 == 0x80000 accept                    # tailscaled's own sockets (its bypass mark)
+@NTP_RULE@        ip daddr @maint_dst accept
+        ip daddr $LAN accept
+        ip daddr 224.0.0.251 udp dport 5353 accept                # mDNS
+        ip protocol igmp accept
+        ip daddr 255.255.255.255 udp sport 68 udp dport 67 accept # DHCP discover
+@FINAL_OUT@
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+}
