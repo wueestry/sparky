@@ -29,9 +29,9 @@ It is reached through [`litellm/`](../../litellm/) as model `qwen3.8-flash-next`
 With the host firewall ([`firewall/`](../../firewall/)) the internet is closed by default, so everything that downloads needs it turned off for the duration: `make prepare` (the image pull or build, and the ~96 GiB checkpoint), `make update`'s `git fetch`, and a `git submodule update`. Serving does not: loading is offline (`HF_HUB_OFFLINE=1`) and LiteLLM reaches the engine over the Docker network.
 
 ```bash
-make -C /opt/firewall disable MINUTES=90   # firewall off; it re-enables itself after 90 minutes
+make -C <repo>/firewall disable MINUTES=90   # firewall off; it re-enables itself after 90 minutes
 make prepare
-make -C /opt/firewall enable               # back on, right now
+make -C <repo>/firewall enable               # back on, right now
 ```
 
 ## First-time setup

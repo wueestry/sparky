@@ -8,7 +8,7 @@ SHELL := /usr/bin/env bash
 # gateway alone.
 #
 # Run from the directory that holds the stack subdirs: the repo root, or
-# /opt on the host (where models/, litellm/, open-webui/, … are siblings).
+# <repo> on the host (where models/, litellm/, open-webui/, … are siblings; /opt on spark-1822).
 # Override ROOT if they live elsewhere.
 #
 # GPU note: qwen38 (~90 GiB: weights + KV pool + reserve) claims unified memory

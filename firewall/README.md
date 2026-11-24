@@ -46,7 +46,7 @@ Prerequisites: Tailscale runs on the host ([`tailscale/`](../tailscale/)); `nft`
 Do this from a **LAN SSH session, with a second one open** (and the tailnet as another way in):
 
 ```bash
-cd /opt/firewall
+cd <repo>/firewall
 cp .env.example .env        # check LAN_CIDR (192.168.1.0/24) and NTP_SERVERS
 make check                  # validates the ruleset, warns about ufw / nftables.service / tailscale
 make install                # script + boot unit; loads nothing
@@ -87,8 +87,8 @@ make confirm                # …you confirm from a second session
 Deploying from your laptop:
 
 ```bash
-ssh spark-1822.local 'make -C /opt/firewall disable MINUTES=10 \
-  && sudo git -C /opt pull --ff-only --recurse-submodules; make -C /opt/firewall enable'
+ssh spark-1822.local 'make -C <repo>/firewall disable MINUTES=10 \
+  && sudo git -C <repo> pull --ff-only --recurse-submodules; make -C <repo>/firewall enable'
 ```
 
 ## How it works

@@ -1,6 +1,6 @@
 # Architecture
 
-sparky is the configuration of one machine, `spark-1822` (an NVIDIA DGX Spark), that serves an LLM to the local network and a tailnet. `/opt` on the host is a checkout of this repository; every stack lives in place at `/opt/<name>/` and is run with Docker Compose or, for host services, systemd.
+sparky is the configuration of one machine, `spark-1822` (an NVIDIA DGX Spark), that serves an LLM to the local network and a tailnet. The host runs straight from a checkout of this repository (`<repo>` in these docs; `/opt` on `spark-1822`): every stack lives in place at `<repo>/<name>/` and is run with Docker Compose or, for host services, systemd. Nothing depends on the checkout being at a particular path.
 
 ## Components
 
@@ -81,7 +81,7 @@ The engine claims about 90 GiB of the GB10's unified memory eagerly, which is wh
 | Open WebUI users and chats | external Docker volume `open-webui` | no |
 | Traefik CA and wildcard key | `traefik/certs/` | no |
 | Resolved engine config | `models/qwen38/.generated/` | no |
-| Model weights, kernel cache | `/opt/hf/.cache/...` | no |
+| Model weights, kernel cache | default `/opt/hf/.cache/...`; set `HF_CACHE`, `KERNEL_CACHE`, `STATE_DIR`, `LOG_DIR` in `models/qwen38/.env` | no |
 | Firewall ruleset and state | `/etc/sparky-firewall/`, `/var/lib/sparky-firewall/`, `/run/sparky-firewall/` | no |
 
 The two databases are **external** volumes, created once by hand, so `docker compose down -v` can never delete keys, spend history or chats. Models are declared in `litellm/config.yaml` and `STORE_MODEL_IN_DB` is off, so the model list is version-controlled.
@@ -93,10 +93,10 @@ The host firewall closes the internet, so the steady state must not need it. Loa
 ## How a change reaches the host
 
 ```
-edit → commit → push → ssh host: git -C /opt pull --ff-only --recurse-submodules → apply in the stack
+edit → commit → push → ssh host: git -C <repo> pull --ff-only --recurse-submodules → apply in the stack
 ```
 
-Applying depends on the stack: model stacks run `make up` (after `make update` for a new upstream commit), Traefik hot-reloads labels and `dynamic/*.yml` and restarts only if `traefik.yml` changed, other stacks run `docker compose up -d`. Host services (`mdns/`, `tailscale/`, `firewall/`) have a `make install` that copies their helper and unit into place; the repo checkout is not what systemd runs, so a transient timer never depends on `/opt` being mounted or current.
+Applying depends on the stack: model stacks run `make up` (after `make update` for a new upstream commit), Traefik hot-reloads labels and `dynamic/*.yml` and restarts only if `traefik.yml` changed, other stacks run `docker compose up -d`. Host services (`mdns/`, `tailscale/`, `firewall/`) have a `make install` that copies their helper and unit into place; the repo checkout is not what systemd runs, so a transient timer never depends on the checkout being present or current.
 
 ## Conventions
 
