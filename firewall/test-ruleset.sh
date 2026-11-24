@@ -23,15 +23,18 @@ bad() { fail=$((fail + 1)); echo "FAIL - $1"; }
 check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 # ---------------------------------------------------------------- render
-render() { ( cd "$here" && env LAN_CIDR="${LAN_CIDR:-192.168.1.0/24}" TIMESYNC_USER="${TIMESYNC_USER:-0}" MODE="$1" ./render.sh "$2" ) >"$tmp/render.out" 2>&1; }
+render() { ( cd "$here" && env LAN_CIDR="${LAN_CIDR:-192.168.1.0/24}" NTP_SERVERS="${NTP_SERVERS:-}" MODE="$1" ./render.sh "$2" ) >"$tmp/render.out" 2>&1; }
 render enforce "$tmp/enforce.nft"; rc=$?
 check "render: enforce renders"                      '(( rc == 0 )) && ! grep -q "@[A-Z_]*@" "$tmp/enforce.nft"'
 check "render: mode is recorded in the file"         'grep -qx "# sparky-fw mode: enforce" "$tmp/enforce.nft"'
 check "render: enforce rejects, audit accepts"       'render audit "$tmp/audit.nft" && grep -q "reject with tcp reset" "$tmp/enforce.nft" && ! grep -q "reject" "$tmp/audit.nft" && grep -q "AUDIT out" "$tmp/audit.nft"'
 check "render: 192.168.1.1/24 is normalised to the network" 'LAN_CIDR=192.168.1.1/24 render enforce "$tmp/n.nft" && grep -q "^define LAN = 192.168.1.0/24" "$tmp/n.nft" && grep -q normalised "$tmp/render.out"'
-for bad_env in "LAN_CIDR=0.0.0.0/0" "LAN_CIDR=nonsense" "LAN_CIDR=fd00::/64" "TIMESYNC_USER=a;b" "TIMESYNC_USER=\$(id)"; do
+for bad_env in "LAN_CIDR=0.0.0.0/0" "LAN_CIDR=nonsense" "LAN_CIDR=fd00::/64" "NTP_SERVERS=a;b" "NTP_SERVERS=fd00::1" "NTP_SERVERS=pool.ntp.org"; do
   check "render: refuses $bad_env"                   '( export "$bad_env"; ! render enforce "$tmp/x.nft" )'
 done
+check "render: no NTP rule unless NTP_SERVERS is set"  '! grep -q "dport 123" "$tmp/enforce.nft" && ! grep -q skuid "$tmp/enforce.nft"'
+check "render: NTP_SERVERS adds a destination-limited rule" 'NTP_SERVERS="10.9.9.9, 10.8.8.8" render enforce "$tmp/ntp.nft" && grep -q "ip daddr { 10.9.9.9, 10.8.8.8 } udp dport 123 accept" "$tmp/ntp.nft" && nft -c -f "$tmp/ntp.nft"'
+check "render: MODE defaults to enforce"             '( cd "$here" && env -u MODE ./render.sh "$tmp/d.nft" >/dev/null 2>&1 ) && grep -qx "# sparky-fw mode: enforce" "$tmp/d.nft"'
 check "render: refuses a bad MODE"                   '! render bogus "$tmp/x.nft"'
 check "nft -c accepts both modes"                    'nft -c -f "$tmp/enforce.nft" && nft -c -f "$tmp/audit.nft"'
 

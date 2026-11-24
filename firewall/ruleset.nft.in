@@ -3,7 +3,6 @@
 # sparky-fw mode: @MODE@
 
 define LAN = @LAN_CIDR@
-define TIMESYNC_USER = @TIMESYNC_USER@      # name or numeric UID; nft resolves it at load time
 
 # One atomic transaction: (re)create and replace the table. This file never
 # flushes the whole ruleset, so it cannot disturb any other table.
@@ -41,8 +40,7 @@ table inet sparky_fw {
         oifname "lo" accept
         oifname "tailscale0" accept
         meta mark & 0xff0000 == 0x80000 accept                    # tailscaled's own sockets (its bypass mark)
-        meta skuid $TIMESYNC_USER udp dport 123 accept            # NTP
-        ip daddr @maint_dst accept
+@NTP_RULE@        ip daddr @maint_dst accept
         ip daddr $LAN accept
         ip daddr 224.0.0.251 udp dport 5353 accept                # mDNS
         ip protocol igmp accept

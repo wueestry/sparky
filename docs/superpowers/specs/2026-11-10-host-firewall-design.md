@@ -63,7 +63,7 @@ This is the assumption the design leans on, and section 10 verifies it:
 - **Ingress.** Published ports (`:80`, `:443`) are plain userspace listeners, so they *do* traverse the host's `INPUT` chain. (Rootful Docker's DNAT bypasses `INPUT`, which is why host firewalls are famously leaky there.)
 - **Container-to-container** traffic never touches the host's netfilter.
 
-Consequence: a default-deny `OUTPUT` policy that allows only the LAN already gives every container LAN-only egress, with no per-container rules. Only the services that genuinely need the internet (`tailscaled`, NTP) need an identity-based exception.
+Consequence: a default-deny `OUTPUT` policy that allows only the LAN already gives every container LAN-only egress, with no per-container rules. Only `tailscaled`, which genuinely needs the internet, gets an identity-based exception.
 
 ## Decisions (locked in)
 
@@ -73,7 +73,7 @@ Consequence: a default-deny `OUTPUT` policy that allows only the LAN already giv
 4. **IPv6 is blocked** except on loopback and `tailscale0`. Blocked outbound IPv6 is *rejected*, not dropped, so dual-stack clients fall back to IPv4 immediately instead of hanging.
 5. **Tailscale runs on the host as root, in kernel mode** (a prerequisite). Its traffic is allowed by *what it is*, not by destination: the control plane, DERP relays and peers have no stable IPs, and nftables cannot match hostnames.
 6. **Identity for `tailscaled` is its socket mark, not its cgroup.** `tailscaled` sets `SO_MARK = 0x80000` (mask `0xff0000`) on every non-loopback socket it creates, so its packets can be matched with `meta mark & 0xff0000 == 0x80000`. A cgroup match (`socket cgroupv2 … "system.slice/tailscaled.service"`) was considered and rejected: nft resolves the path to a cgroup ID at load time, so the ruleset fails to load when the service isn't running, and the rule would go stale each time `tailscaled` restarts and gets a new cgroup. Only root can set that mark.
-7. **NTP is allowed by user, not destination**: `meta skuid systemd-timesync … udp dport 123`. (Accurate time is required for Tailscale's TLS; `timesyncd`'s default pool servers are on the internet.)
+7. **NTP goes to the LAN or to explicitly listed servers**, never to "any host" by user: an any-destination udp/123 rule would be a free tunnel out. The LAN rule already covers a router or LAN time server; `NTP_SERVERS` (IPv4 list in `.env`, empty by default) adds `ip daddr { … } udp dport 123`. (Accurate time is required for Tailscale's TLS.)
 8. **Outbound blocks are `reject`ed, inbound blocks are `drop`ped.** A rejected connect fails in milliseconds (measured 0.04 s in the namespace test) instead of stalling for a timeout, which keeps `docker pull` and friends from hanging with no explanation. Silently dropping inbound gives scanners nothing.
 9. **The internet is closed by default, including every container registry, and is reached by explicitly disabling the firewall.** `make disable` removes the whole `sparky_fw` table (inbound filtering too: everything is open while it is off) and arms a re-enable timer (default 30 min, capped at 240); `make enable` re-loads the ruleset immediately and cancels the timer. The disabled state is runtime-only: the boot unit stays enabled, so a reboot always comes back filtered, and the timer means a forgotten `disable` cannot last. There is no per-registry exception list; if a standing exception is ever wanted that is the FQDN allow-list under "Future work", not part of this change.
    - A **narrower alternative** is kept for when inbound filtering should stay on: `make open MINUTES=15` adds `0.0.0.0/0 timeout 15m` to an nft set, which opens *egress only* and closes by itself with no timer or daemon. (Tested: opens, closes on its own after the timeout, can be closed early.) Use `disable` when you want everything open, `open` when you only need to reach out.
@@ -111,7 +111,7 @@ Not opened: udp `41641` from the internet. Direct Tailscale paths come up throug
 | `oifname lo` | accept |
 | `oifname tailscale0` | accept (tailnet ACLs) |
 | packet mark `0x80000/0xff0000` | accept (`tailscaled`: control plane, DERP, STUN, WireGuard to peers) |
-| user `systemd-timesync`, udp `123` | accept |
+| udp `123` to `NTP_SERVERS` (empty by default; the LAN is already allowed) | accept |
 | `ip daddr @maint_dst` | accept, **only while a maintenance window is open** |
 | `ip daddr 192.168.1.0/24` | accept (LAN: router DNS, DHCP renewals, SSH replies, mDNS unicast, everything else on the LAN) |
 | `224.0.0.251` udp `5353` | accept (mDNS) |
@@ -129,7 +129,7 @@ LAN 192.168.1.0/24 ─┤ input : 22, 80, 443, mDNS, ping           ┐         
                     │                                           ├─> sshd, Traefik (rootlesskit :80/:443)   │
 tailnet ── tailscale0 ──── accept (tailnet ACLs) ───────────────┘     tailscaled ──> 127.0.0.1:80/443       │
                     │                                                                                       │
-                    │ output: LAN ✔   tailscale0 ✔   tailscaled (mark 0x80000) ✔   NTP (timesyncd) ✔        │
+                    │ output: LAN ✔   tailscale0 ✔   tailscaled (mark 0x80000) ✔   NTP (LAN / listed) ✔        │
 internet ◀──────────┤         rootless Docker user (all containers) ✘ ── reject                              │
                     │         root apt / git / hf ✘ ── reject, unless:                                       │
                     │         `make disable` → table removed, auto re-enable timer;  `make enable` → back    │
@@ -145,11 +145,11 @@ Host-level, in the style of `mdns/` and `tailscale/` (not a Compose stack).
 
 ```
 firewall/
-├── ruleset.nft.in             # the ruleset, with @LAN_CIDR@ / @TIMESYNC_USER@ / @FINAL_IN@ / @FINAL_OUT@ placeholders
+├── ruleset.nft.in             # the ruleset, with @LAN_CIDR@ / @NTP_RULE@ / @FINAL_IN@ / @FINAL_OUT@ placeholders
 ├── render.sh                  # fills the placeholders from .env; MODE=enforce|audit
 ├── sparky-firewall.service    # oneshot: loads the rendered ruleset before the network comes up
 ├── Makefile                   # check, install, apply, confirm, revert, open, close, status, logs, audit-report
-├── .env.example               # LAN_CIDR, TIMESYNC_USER, MODE, REVERT_SECONDS
+├── .env.example               # LAN_CIDR, NTP_SERVERS, MODE, REVERT_SECONDS
 ├── test-ruleset.sh            # netns tests (section 9)
 └── README.md
 ```
@@ -161,7 +161,7 @@ The appendix is the reference. `render.sh` substitutes:
 | Placeholder | Default | Source |
 |---|---|---|
 | `@LAN_CIDR@` | `192.168.1.0/24` | `.env` |
-| `@TIMESYNC_USER@` | `systemd-timesync` | `.env` (name or numeric UID; nft resolves it at load) |
+| `@NTP_RULE@` | empty | `.env` `NTP_SERVERS` (IPv4 list) |
 | `@FINAL_OUT@` | `reject` actions | `MODE=enforce`; in `MODE=audit` it is `log … flags skuid` + `accept` |
 | `@FINAL_IN@` | `counter drop` | `MODE=enforce`; in audit it is `log` + `accept` |
 
@@ -217,7 +217,7 @@ WantedBy=sysinit.target
 
 It manages only its own table. It never runs `flush ruleset`, so it cannot disturb anything else (the stock `nftables.service` on Ubuntu does flush; `make check` warns if it is enabled and loading a conflicting file).
 
-The `meta skuid systemd-timesync` rule needs that user to exist at load time. It does on Ubuntu; `make check` verifies.
+NTP needs no user rule: the time client must point at a LAN server or an address in `NTP_SERVERS`.
 
 ### Changes to existing files
 
@@ -304,7 +304,7 @@ Each of these is an assumption above. None changes the *goal*; each could change
 | 2 | Published `:80/:443` (rootlesskit) traverses `INPUT`; the real client IP is visible | `nft monitor trace` while curling from a LAN host | Add the rule where it does land, or switch the port driver |
 | 3 | What reaches `INPUT` from `tailscale0` for a serve/VIP request | `nft monitor trace` with `meta iifname tailscale0` while browsing the tailnet URL | Decides the tightened tailnet rule; if serve is intercepted before the kernel stack, `tailscale0` can be narrowed to `22` only |
 | 4 | `tailscaled`'s control/DERP/WireGuard sockets carry the bypass mark | `nft add rule … meta mark & 0xff0000 == 0x80000 counter` during `tailscale up` / `tailscale ping` | Fall back to `meta skuid 0` plus a destination allow, or `--tun`-less userspace mode |
-| 5 | Which NTP client runs, and as which user | `systemctl status systemd-timesyncd chrony`; `ps -o user,cmd -C chronyd,systemd-timesyn` | Use that user in `@TIMESYNC_USER@`; or point NTP at the router |
+| 5 | Which NTP client runs, and as which user | `systemctl status systemd-timesyncd chrony`; `ps -o user,cmd -C chronyd,systemd-timesyn` | Point NTP at the router, or list the server in `NTP_SERVERS` |
 | 6 | Static address or DHCP; DNS resolver | `nmcli`/`networkctl`, `resolvectl status` | Drop or keep the DHCP rules; confirm DNS goes to a LAN address |
 | 7 | `ufw` and `nftables.service` state | `ufw status`; `systemctl is-enabled nftables` | Disable `ufw`; make sure the stock `nftables.service` can't `flush ruleset` over this table |
 | 8 | nft version on the host supports every expression used (priority keyword, `reject with icmpx`, interval+timeout sets) | `nft --version`, `nft -c -f` on the rendered file | Rewrite the offending expression; the test suite pins a minimum |
@@ -314,9 +314,9 @@ Each of these is an assumption above. None changes the *goal*; each could change
 ## Rollout
 
 1. **Spike** (above). Update this document with the findings.
-2. **PR**: `firewall/`, tests, docs, changelog. Merged with `MODE=audit` as the shipped default.
+2. **PR**: `firewall/`, tests, docs, changelog. Merged with `MODE=enforce` as the shipped default (the audit gate still applies: `make apply MODE=audit` first).
 3. **Host, audit** (several days, covering at least one deploy, one `make prepare` and one OS update): `make install apply confirm`; then `make audit-report`. Everything it lists that is *not* expected is the finding, and what is expected becomes either a documented window or an exception.
-4. **Host, enforce**: set `MODE=enforce`, `make apply` from one SSH session, verify from a second, `make confirm`. The revert timer is the safety net.
+4. **Host, enforce**: `make apply` (enforce is the default) from one SSH session, verify from a second, `make confirm`. The revert timer is the safety net.
 5. **Tighten**: narrow the `tailscale0` rule using spike item 3; review the LAN rules.
 6. **Telemetry settings** (`litellm`, `open-webui`) can ship with the PR; they only stop noise.
 
@@ -327,7 +327,7 @@ Each of these is an assumption above. None changes the *goal*; each could change
 | Lockout from SSH | `nft -c` validation; confirm-or-revert; audit period; apply from a LAN session with Tailscale as a second way in |
 | A needed destination discovered only after enforcement | Audit mode with UID logging first; `make disable` for anything operational (no per-destination exceptions) |
 | `tailscaled` breaks (control plane or relays unreachable) | Identity-based, so IP changes don't matter; acceptance step 4; `make revert` |
-| Clock drift (blocked NTP) breaks Tailscale TLS | NTP allowed by user; spike item 5 |
+| Clock drift (blocked NTP) breaks Tailscale TLS | NTP to the LAN or listed servers; spike item 5 |
 | `nftables.service` / `ufw` / another tool flushes or shadows the table | `make check` detects both; the unit manages only its own table |
 | A cgroup- or user-based match fails at load (missing user) | `make check` verifies; the mark rule is deliberately load-time-independent |
 | Firewall left disabled (everything, inbound included, is open) | Mandatory re-enable timer (default 30 min, cap 240); a reboot always restores it; `make status` and the journal show `DISABLED`; prefer `make open` when inbound filtering should stay on |
@@ -358,7 +358,6 @@ Loaded and exercised in a user+network namespace with nft 1.1.6 (kernel 7.2): 18
 
 ```nft
 define LAN = 192.168.1.0/24
-define TIMESYNC_USER = systemd-timesync      # name or numeric UID; resolved at load
 
 table inet sparky_fw
 delete table inet sparky_fw
@@ -395,7 +394,7 @@ table inet sparky_fw {
         oifname "lo" accept
         oifname "tailscale0" accept
         meta mark & 0xff0000 == 0x80000 accept                    # tailscaled's own sockets (its bypass mark)
-        meta skuid $TIMESYNC_USER udp dport 123 accept            # NTP
+        # NTP: only when NTP_SERVERS is set: ip daddr { … } udp dport 123 accept
         ip daddr @maint_dst accept
         ip daddr $LAN accept
         ip daddr 224.0.0.251 udp dport 5353 accept                # mDNS
@@ -426,9 +425,9 @@ Facts this design rests on, from Tailscale's source (`net/netns`, `tsconst`, `cm
 - **Control script.** The logic lives in `firewall/sparky-firewall` (installed to `/usr/local/bin`), not in the Makefile, so the transient systemd timers (`sparky-fw-revert`, `sparky-fw-reenable`) don't depend on the repo checkout. The Makefile targets are thin `sudo` wrappers; the script also has `check`, `apply`, `confirm`, `revert`, `disable`, `enable`, `open`, `close`, `status`, `logs`, `audit-report`.
 - **`make install` loads and enables nothing.** `apply` installs and loads a validated ruleset; `confirm` enables the boot unit. The unit has `ConditionPathExists` on the ruleset, so an unconfirmed ruleset can't load at boot by accident.
 - **`tailscale set --netfilter-mode=off` happens in `apply`** (not `install`), and `revert` / `uninstall` set it back to `on`.
-- **`make check`** runs `nft -c`, warns about an active `ufw` and an enabled `nftables.service`, warns when no host Tailscale is found, and prints the default route. It does not print the Docker user's UID (nothing in the ruleset needs it: egress is default-deny for everyone but `tailscaled` and the NTP user).
-- **`MODE` default is `audit`** (`.env.example`); `apply` refuses `enforce` until `audit-report` has recorded a review (`FORCE=1` overrides).
+- **`make check`** runs `nft -c`, warns about an active `ufw` and an enabled `nftables.service`, warns when no host Tailscale is found, and prints the default route. It does not print the Docker user's UID (nothing in the ruleset needs it: egress is default-deny for everyone but `tailscaled`).
+- **`MODE` default is `enforce`** (`.env.example` and `render.sh`); `apply` refuses `enforce` until `audit-report` has recorded a review (`FORCE=1` overrides).
 - **`apply` keeps the original previous ruleset** across repeated applies before a confirm, so `revert` always returns to the last *confirmed* state.
-- **`render.sh` normalises a host address to its network**: `LAN_CIDR=192.168.1.1/24` becomes `192.168.1.0/24` (with a note), and refuses IPv6, anything wider than a /8, and unsafe NTP-user values.
+- **`render.sh` normalises a host address to its network**: `LAN_CIDR=192.168.1.1/24` becomes `192.168.1.0/24` (with a note), and refuses IPv6, anything wider than a /8, and invalid `NTP_SERVERS` entries (hostnames, IPv6).
 - **Telemetry variables** (verified against upstream source, not guessed): LiteLLM `LITELLM_TELEMETRY_DISABLED=true` (current images; harmless on older ones), Open WebUI `ENABLE_VERSION_UPDATE_CHECK=false`. `OFFLINE_MODE=true` is documented but left off, because it also stops model downloads and would break RAG embeddings that are not cached yet.
 - **Spike items are unchanged and still open**, in particular: that rootless container egress reaches the host `OUTPUT` chain as the Docker user, what `tailscale0` traffic reaches `INPUT`, and what happens to a transfer that spans a re-enable.

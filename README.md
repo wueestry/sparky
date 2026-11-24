@@ -130,9 +130,9 @@ On a fresh host, in order:
    ```bash
    cd /opt/firewall
    cp .env.example .env             # check LAN_CIDR
-   make check && make install && make apply   # MODE=audit first: logs, blocks nothing; reverts in 2 min…
+   make check && make install && make apply   # `make apply MODE=audit` first: logs, blocks nothing; reverts in 2 min…
    make confirm                     # …unless you run this from a SECOND ssh session
-   make audit-report                # a few days later; then MODE=enforce, apply and confirm again
+   make audit-report                # a few days later; then plain `make apply` (enforce is the default) and confirm again
    ```
 
    From then on the internet is closed by default: pulling images, downloading models, `git pull` and OS updates need `make disable` … `make enable` (see below and [`firewall/README.md`](firewall/README.md)).

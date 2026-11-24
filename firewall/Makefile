@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 .SUFFIXES:
 
 # Host firewall (nftables). Design: docs/superpowers/specs/2026-11-10-host-firewall-design.md
-# Settings (LAN_CIDR, TIMESYNC_USER, MODE, REVERT_SECONDS) live in .env.
+# Settings (LAN_CIDR, NTP_SERVERS, MODE, REVERT_SECONDS) live in .env.
 
 BIN      := /usr/local/bin/sparky-firewall
 UNIT     := /etc/systemd/system/sparky-firewall.service
@@ -24,8 +24,8 @@ help:  ## Show this help.
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/{printf "  \033[36m%-13s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
 	@echo
 	@echo "First time (from a LAN ssh session, with a second one open):"
-	@echo "  make install → make apply (MODE=audit) → … a few days … → make audit-report"
-	@echo "  → set MODE=enforce in .env → make apply → check access from another session → make confirm"
+	@echo "  make install → make apply MODE=audit → … a few days … → make audit-report"
+	@echo "  → make apply (MODE=enforce is the default) → check access from another session → make confirm"
 	@echo
 	@echo "Internet is CLOSED by default (no registry/hostname allow-list). To pull images, download"
 	@echo "models, git pull or update the OS:   make disable   …do it…   make enable"
