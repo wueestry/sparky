@@ -8,14 +8,14 @@ client ──> traefik ──> litellm:4000 ──> qwen38:8888      (models/qwe
                             └─ litellm-db (Postgres: keys, spend)   [private network, not on `traefik`]
 ```
 
-- URL on the LAN: `https://litellm.spark-1822.local` (publish the alias: `cd /opt/mdns && make add ALIAS=litellm`). The router matches any `litellm.<domain>`; for a tailnet name, add a `svc:litellm` VIP service as described in [`tailscale/README.md`](../tailscale/README.md).
+- URL on the LAN: `https://litellm.spark-1822.local` (publish the alias: `cd <repo>/mdns && make add ALIAS=litellm`). The router matches any `litellm.<domain>`; for a tailnet name, add a `svc:litellm` VIP service as described in [`tailscale/README.md`](../tailscale/README.md).
 - Direct on the host: `http://127.0.0.1:4000`.
 - Admin UI: `/ui`, log in with the master key.
 
 ## Setup
 
 ```bash
-cd /opt/litellm
+cd <repo>/litellm
 cp .env.example .env
 # fill LITELLM_MASTER_KEY (sk-…), LITELLM_SALT_KEY, POSTGRES_PASSWORD:  openssl rand -hex 24
 docker volume create litellm-db      # once; external so `down -v` can never delete keys

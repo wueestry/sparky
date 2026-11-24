@@ -46,7 +46,7 @@ networks:
     attachable: true
 
 # Volume for LetsEncrypt state (acme.json). Held in a docker volume so
-# the private keys never land on disk under /opt. Unused until the
+# the private keys never land on disk in the repo checkout. Unused until the
 # letsencrypt resolver in traefik.yml is uncommented.
 # volumes:
 #   traefik-acme:

@@ -17,7 +17,7 @@ mdns/
 ## Install
 
 ```bash
-cd /opt/mdns
+cd <repo>/mdns
 make install
 ```
 
@@ -85,11 +85,11 @@ make remove ALIAS=litellm
 Stops + disables every active alias instance, removes the script and unit file, reloads systemd:
 
 ```bash
-cd /opt/mdns
+cd <repo>/mdns
 make uninstall
 ```
 
-The repo files under `/opt/mdns/` stay in place so a future `make install` brings everything back.
+The repo files under `<repo>/mdns/` stay in place so a future `make install` brings everything back.
 
 ## How it works
 

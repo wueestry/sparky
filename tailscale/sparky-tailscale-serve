@@ -33,7 +33,7 @@ wait_running() {
     [[ "$state" == Running ]] && return 0
     sleep 2
   done
-  die "tailscale is not logged in and running after ${WAIT}s (state: ${state:-unreachable}); run 'make up' in /opt/tailscale"
+  die "tailscale is not logged in and running after ${WAIT}s (state: ${state:-unreachable}); run 'make up' in the tailscale/ stack of the repo checkout"
 }
 
 case "${1:-}" in

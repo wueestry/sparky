@@ -39,7 +39,7 @@ tailnet client ──(https :443)──> tailscaled ──> https+insecure://127
 2. **Check, install the helper, log in, apply:**
 
    ```bash
-   cd /opt/tailscale
+   cd <repo>/tailscale
    make check      # tailscale installed, recent enough, tailscaled running
    make install    # script + boot-time unit + services.json under /etc/sparky-tailscale
    make up         # `tailscale up --hostname=spark-1822 --accept-dns=false` — open the printed URL to log in
@@ -67,7 +67,7 @@ Tailscale keeps its serve config in its state, so the node keeps serving across 
 
 Do this in order:
 
-1. **Before `git pull`** (it deletes the compose file): `cd /opt/tailscale && docker compose down`. The `tailscale-state` volume is left in place; `docker volume rm tailscale-state` once you're done.
+1. **Before `git pull`** (it deletes the compose file): `cd <repo>/tailscale && docker compose down`. The `tailscale-state` volume is left in place; `docker volume rm tailscale-state` once you're done.
 2. **Delete the old node** in the admin console (Machines → `spark-1822` → Delete). Otherwise the new node registers as `spark-1822-1` and every URL changes. The VIP services themselves stay; only the node that hosts them changes.
 3. `git pull`, then install and log in as above.
 

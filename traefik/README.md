@@ -68,7 +68,7 @@ The root and the leaf are both gitignored (`*.crt` / `*.key`). They're host-spec
 Prereq: TLS material exists (`make ca-cert && make wildcard-cert`). Then bring Traefik up — that creates the shared `traefik` Docker network:
 
 ```bash
-cd /opt/traefik && docker compose up -d
+cd <repo>/traefik && docker compose up -d
 docker compose ps
 ```
 
@@ -110,7 +110,7 @@ services:
 Publish the mDNS alias on the host (see [`../mdns/`](../mdns/)):
 
 ```bash
-cd /opt/mdns && make add ALIAS=myapp
+cd <repo>/mdns && make add ALIAS=myapp
 ```
 
 Bring the app up — Traefik picks up the labels live (docker provider has `watch: true`); no Traefik restart needed.
