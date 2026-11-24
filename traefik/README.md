@@ -41,6 +41,8 @@ make wildcard-cert   # mint certs/wildcard.{crt,key} signed by the root (365-day
 
 Re-run `make wildcard-cert` to renew the leaf (override the validity with `CERT_DAYS=30 make wildcard-cert`). `make ca-cert` is a no-op if the root already exists — delete `certs/traefik-root.*` only when you want to rotate, and remember that every previously-trusting client will need the new root installed.
 
+The leaf covers `<host>.local` and `*.<host>.local`, where `<host>` is the host's short hostname (`hostname -s`): the same name `mdns/` publishes aliases under, so the two always agree. Override with `make wildcard-cert CERT_HOST=other.local`; the command prints the names it signed. **If the hostname changes, re-run `make wildcard-cert`** (the root, and so every client's trust, is unaffected). The `spark-1822.local` URLs in these docs are what you get on a host named `spark-1822`.
+
 ### Trust the root CA
 
 Every client (your laptop, phone, container that talks back to this host) needs `certs/traefik-root.crt` in its trust store. Otherwise browsers warn and curl wants `-k`. Per-OS install steps:

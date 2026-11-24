@@ -6,6 +6,10 @@ SHELL := /usr/bin/env bash
 
 CA_DAYS   ?= 3650        # 10 years for the root
 CERT_DAYS ?= 365         # 1 year for the leaf (the wildcard)
+# Name the wildcard covers (<host> and *.<host>). Follows the hostname, like
+# mdns/ (`<alias>.$(hostname -s).local`); override: make wildcard-cert CERT_HOST=other.local
+CERT_HOST ?= $(shell hostname -s).local
+export CERT_HOST
 
 .PHONY: help ca-cert wildcard-cert
 
@@ -51,6 +55,7 @@ wildcard-cert:  ## Mint the wildcard leaf cert signed by Traefik's root. Re-run 
 	    exit 1; \
 	fi
 	@mkdir -p certs
+	@echo "→ certificate names: $(CERT_HOST) and *.$(CERT_HOST)"
 	@tmp=$$(mktemp -d) && trap "rm -rf $$tmp" EXIT && { \
 	    echo "→ generating wildcard private key"; \
 	    openssl genrsa -out certs/wildcard.key 2048 2>/dev/null; \
@@ -65,5 +70,5 @@ wildcard-cert:  ## Mint the wildcard leaf cert signed by Traefik's root. Re-run 
 	    chmod 600 certs/wildcard.key; \
 	    echo; \
 	    echo "✓ wrote certs/wildcard.crt + certs/wildcard.key"; \
-	    openssl x509 -in certs/wildcard.crt -noout -subject -issuer -dates | sed 's/^/  /'; \
+	    openssl x509 -in certs/wildcard.crt -noout -subject -issuer -dates -ext subjectAltName | sed 's/^/  /'; \
 	}

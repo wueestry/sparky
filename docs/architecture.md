@@ -63,7 +63,7 @@ Streaming matters here: idle and forwarding timeouts are disabled on the `websec
 
 Two independent roots, one per path:
 
-- **LAN:** Traefik serves a wildcard certificate (`traefik/certs/wildcard.crt`) signed by an internal CA that `make ca-cert` and `make wildcard-cert` mint. Clients install `traefik-root.crt` once. The Let's Encrypt resolver is scaffolded in `traefik.yml` but off, since `.local` names cannot be issued public certificates.
+- **LAN:** Traefik serves a wildcard certificate (`traefik/certs/wildcard.crt`) signed by an internal CA that `make ca-cert` and `make wildcard-cert` mint. The names on the wildcard come from the host's short hostname (`<host>.local` and `*.<host>.local`), the same name `mdns/` publishes aliases under; after a rename, re-run `make wildcard-cert`. Clients install `traefik-root.crt` once. The Let's Encrypt resolver is scaffolded in `traefik.yml` but off, since `.local` names cannot be issued public certificates.
 - **Tailnet:** Tailscale provisions publicly trusted certificates for the MagicDNS name; clients need nothing.
 
 ## The model engine
