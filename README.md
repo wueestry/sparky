@@ -38,7 +38,7 @@ TLS comes from two different roots: Traefik mints its own internal CA (clients i
 ├── litellm/       # LiteLLM gateway (+ Postgres) in front of models/
 ├── open-webui/    # Open WebUI (chat UI over litellm)
 ├── mdns/          # Host-side mDNS aliases helper
-├── docs/          # Design/planning docs (historical: the retired llama-cpp router mode)
+├── docs/          # Architecture and implementation docs
 ├── Makefile       # top-level service control (up / down)
 ├── sparky.svg     # Project logo (AI self-portrait)
 ├── CHANGELOG.md
@@ -188,7 +188,7 @@ The Qwen engine claims ~90 GiB of the GB10's unified memory eagerly and can't co
 ## Repo housekeeping
 
 - [`CHANGELOG.md`](CHANGELOG.md) — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format, [SemVer](https://semver.org/spec/v2.0.0.html) versioning.
-- [`docs/`](docs/) — design/planning docs for individual features (e.g. `docs/superpowers/specs/`, `docs/superpowers/plans/`; the llama-cpp router-mode ones describe a stack that has since been retired).
+- [`docs/`](docs/) — how it is built: [`architecture.md`](docs/architecture.md) (request paths, networks, TLS, state) and [`firewall.md`](docs/firewall.md) (the firewall, rule by rule).
 - [`LICENSE`](LICENSE) — MIT.
 - [`sparky.svg`](sparky.svg) — project mascot. Drawn by the AI that helped build this repo, as a self-portrait.
 

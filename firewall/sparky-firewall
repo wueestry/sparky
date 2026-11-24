@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Host firewall control. Runs as root; installed to /usr/local/bin so the transient
 # systemd timers it arms (revert, re-enable) never depend on the repo checkout.
-# Design: docs/superpowers/specs/2026-11-10-host-firewall-design.md
+# Design: docs/firewall.md
 #
 #   sparky-firewall check FILE            validate a rendered ruleset and the host around it
 #   sparky-firewall apply FILE            install + load FILE, then auto-revert unless confirmed

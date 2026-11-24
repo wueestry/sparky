@@ -13,7 +13,7 @@ docker compose pull # …or make prepare, git pull, apt upgrade
 make enable         # firewall back ON, right now
 ```
 
-Design, threat model and rationale: [`docs/superpowers/specs/2026-11-10-host-firewall-design.md`](../docs/superpowers/specs/2026-11-10-host-firewall-design.md).
+How it is implemented, rule by rule, and its limits: [`docs/firewall.md`](../docs/firewall.md).
 
 ## Files
 
@@ -25,7 +25,7 @@ firewall/
 ├── sparky-firewall.service    # loads the confirmed ruleset before the network comes up
 ├── Makefile                   # the commands below
 ├── .env.example               # LAN_CIDR, NTP_SERVERS, MODE, REVERT_SECONDS
-├── test-ruleset.sh            # 74 checks in a throwaway namespace (no root, no effect on the real network)
+├── test-ruleset.sh            # 78 checks in a throwaway namespace (no root, no effect on the real network)
 └── README.md
 ```
 

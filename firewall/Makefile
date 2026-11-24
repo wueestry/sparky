@@ -3,7 +3,7 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -e -o pipefail -c
 .SUFFIXES:
 
-# Host firewall (nftables). Design: docs/superpowers/specs/2026-11-10-host-firewall-design.md
+# Host firewall (nftables). Design: docs/firewall.md
 # Settings (LAN_CIDR, NTP_SERVERS, MODE, REVERT_SECONDS) live in .env.
 
 BIN      := /usr/local/bin/sparky-firewall
